@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0b0b0f;
+  --primary: #2563eb;
+}
+
+body {
+  @apply bg-black text-slate-900;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Inter", sans-serif;
+}
+
+button,
+input {
+  font-family: inherit;
+}
