@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
-import { AuthShell } from "@/src//components/AuthShell";
-import { Button, TextInput } from "@/src//components/ui";
+import { AuthShell } from "@/src/components/AuthShell";
+import { Button, TextInput } from "@/src/components/ui";
 
 export default function LoginPage() {
   return (
@@ -26,7 +26,8 @@ export default function LoginPage() {
           <SocialIconButton src="/icons/ic_twotone-apple.png" alt="Sign in with Apple" />
         </div>
 
-        <form className="flex flex-col gap-4">
+        {/* For now, just navigate on click instead of real auth */}
+        <div className="flex flex-col gap-4">
           <TextInput
             label="Email Address"
             type="email"
@@ -39,10 +40,13 @@ export default function LoginPage() {
             placeholder="Enter your password"
             required
           />
-          <Button type="submit" className="mt-2">
-            Sign in
-          </Button>
-        </form>
+          <Link
+            href="/driver/onboarding/basic-details"
+            className="mt-2 block w-full"
+          >
+            <Button type="button">Sign in</Button>
+          </Link>
+        </div>
 
         <div className="flex flex-col items-center gap-2 text-xs text-slate-500">
           <Link href="/reset-password" className="hover:underline">
