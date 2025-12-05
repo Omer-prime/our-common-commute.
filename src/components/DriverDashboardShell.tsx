@@ -14,8 +14,10 @@ type Props = {
 const navItems = [
   { href: "/driver/dashboard", label: "Home", icon: Home },
   { href: "/driver/dashboard/my-rides", label: "My rides", icon: Clock },
-  { href: "/driver/dashboard/payments", label: "Payments", icon: CreditCard },
-  { href: "/driver/dashboard/support", label: "Support", icon: LifeBuoy },
+  // { href: "/driver/dashboard/payments", label: "Payments", icon: CreditCard },
+  { href: "/driver/dashboard/earnings", label: "Earnings", icon: CreditCard },
+  // { href: "/driver/dashboard/support", label: "Support", icon: LifeBuoy },
+  { href: "/driver/dashboard/profile", label: "Profile", icon: LifeBuoy },
 ];
 
 export function DriverDashboardShell({ children }: Props) {
