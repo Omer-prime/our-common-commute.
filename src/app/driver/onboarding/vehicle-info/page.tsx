@@ -67,7 +67,7 @@ export default function VehicleInfoPage() {
             href="/driver/onboarding/work-schedule"
             className="block w-full"
           >
-            <Button type="button">Proceed</Button>
+            <Button type="button" className="w-full">Proceed</Button>
           </Link>
 
           <div className="flex justify-center">

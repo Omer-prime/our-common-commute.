@@ -29,7 +29,7 @@ export default function PayoutPage() {
             href="/driver/onboarding/safety"
             className="block w-full"
           >
-            <Button type="button">Proceed</Button>
+            <Button type="button" className="w-full">Proceed</Button>
           </Link>
 
           <div className="flex justify-center">

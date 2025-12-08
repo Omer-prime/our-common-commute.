@@ -12,7 +12,7 @@ export default function SafetyConsentPage() {
     >
       <div className="flex flex-col gap-4">
         <Link href="/driver/dashboard" className="block w-full">
-          <Button type="button">Yes, I accept</Button>
+          <Button type="button" className="w-full">Yes, I accept</Button>
         </Link>
 
         <Button type="button" variant="secondary">

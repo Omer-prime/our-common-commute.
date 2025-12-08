@@ -33,7 +33,7 @@ export default function DriverBasicDetailsPage() {
           href="/driver/onboarding/identity-id"
           className="mt-2 block w-full"
         >
-          <Button type="button">Create an account</Button>
+          <Button type="button" className="w-full">Create an account</Button>
         </Link>
 
         <p className="mt-2 text-[11px] text-slate-400 text-center">

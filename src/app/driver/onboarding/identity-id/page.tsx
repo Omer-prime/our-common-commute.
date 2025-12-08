@@ -27,7 +27,7 @@ export default function IdentityIdPage() {
             href="/driver/onboarding/identity-selfie"
             className="block w-full"
           >
-            <Button type="button">Proceed</Button>
+            <Button type="button" className="w-full">Proceed</Button>
           </Link>
 
           <div className="flex justify-center">
