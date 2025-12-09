@@ -65,7 +65,7 @@ export default function LoginPage() {
 
                             {/* For now navigate on click instead of real auth */}
                             <Link
-                                href="/driver/onboarding/basic-details"
+                                href="/rider/onboarding/basic-details"
                                 className="block w-full"
                             >
                                 <Button type="button" className="w-full">
