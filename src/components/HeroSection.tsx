@@ -37,7 +37,7 @@ export default function HeroSection() {
             trusted drivers, anytime, anywhere.
           </p>
 
-          {/* CTAs – same vibe & alignment as Figma */}
+          {/* CTAs */}
           <div className="mt-5 flex items-center justify-center gap-4">
             <Link href="/auth">
               <Button
@@ -48,11 +48,11 @@ export default function HeroSection() {
               </Button>
             </Link>
             <Button
-              variant="outline" // 👈 use the new Figma-style variant
+              variant="outline"
               className="min-w-[170px] px-8 text-[14px]"
               type="button"
             >
-              Earn with MyTaxi
+              Earn with OCC
             </Button>
           </div>
         </div>
@@ -67,7 +67,6 @@ export default function HeroSection() {
           priority
           className="object-cover"
         />
-        {/* bottom vignette like Figma */}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-slate-900/40 via-slate-900/10 to-transparent" />
       </div>
     </section>

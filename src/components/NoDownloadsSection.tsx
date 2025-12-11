@@ -1,12 +1,9 @@
+// src/components/NoDownloadsSection.tsx
 import Image from "next/image";
 
 export default function NoDownloadsSection() {
   return (
     <section className="relative pb-20 pt-12">
-      {/* Exact Figma-style background:
-         - base white
-         - linear gradient: #C4DCFD -> #2D85FF -> #FFFFFF
-      */}
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 -z-10"
@@ -22,7 +19,9 @@ export default function NoDownloadsSection() {
         <header className="mb-10 text-center sm:mb-12">
           <h2 className="text-[26px] font-bold tracking-tight text-slate-900 sm:text-[32px]">
             No Downloads. No Waiting.{" "}
-            <span className="text-blue-600">Just Rides.</span>
+            <span className="text-blue-600 whitespace-nowrap">
+              Just Rides.
+            </span>
           </h2>
           <p className="mx-auto mt-3 max-w-2xl text-[15px] leading-relaxed text-slate-600">
             Built for speed, safety, and simplicity. From instant matching and
@@ -31,7 +30,7 @@ export default function NoDownloadsSection() {
           </p>
         </header>
 
-        {/* Big visual card (woman + blue block), Figma-style */}
+        {/* Big visual card */}
         <div className="mx-auto max-w-5xl">
           <div
             className="
@@ -49,7 +48,6 @@ export default function NoDownloadsSection() {
                 md:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]
               "
             >
-              {/* left: image */}
               <div className="relative h-full overflow-hidden rounded-[28px]">
                 <Image
                   src="/woman.jpg"
@@ -60,7 +58,6 @@ export default function NoDownloadsSection() {
                 />
               </div>
 
-              {/* right: solid cobalt block with clear gap */}
               <div className="hidden h-full rounded-[28px] bg-[#2D85FF] md:block" />
             </div>
           </div>

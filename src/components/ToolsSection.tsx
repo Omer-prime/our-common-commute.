@@ -1,3 +1,4 @@
+// src/components/ToolsSection.tsx
 import Image from "next/image";
 
 const tools = [
@@ -26,17 +27,17 @@ export default function ToolsSection() {
       className="bg-[#eaf1ff] pb-16 pt-10 scroll-mt-24 sm:pb-20 sm:pt-14"
     >
       <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
-        {/* Heading */}
-        <header className="mb-16 text-center">
-          <h2 className="text-[28px] font-bold tracking-tight text-slate-900 sm:text-[54px]">
-            The Tools Behind Every{" "}
-            <span className="text-blue-600">Great</span> Ride
-          </h2>
-          <p className="mx-auto mt-3 max-w-3xl text-[15px] leading-relaxed text-slate-600">
-            Built for speed, safety, and simplicity. From instant matching and
-            transparent pricing to seamless payments—everything works together
-            so your ride just works.
-          </p>
+        {/* Logo centered under the first hero image */}
+        <header className="mb-12 flex justify-center">
+          <div className="flex h-36 w-36 items-center justify-center rounded-2xl bg-white shadow-[0_18px_45px_rgba(15,23,42,0.18)] ring-1 ring-slate-200">
+            <Image
+              src="/occlogo.jpg"
+              alt="Our Common Commute"
+              width={100}
+              height={100}
+              className="rounded-md"
+            />
+          </div>
         </header>
 
         {/* Cards */}
