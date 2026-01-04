@@ -15,7 +15,9 @@ import {driverTripsRouter} from "./routes/driverTrips.js";
 import {driverProfileRouter} from "./routes/driverProfile.js";
 import {driverNotificationsRouter} from "./routes/driverNotifications.js";
 import {driverEarningsRouter} from "./routes/earnings.js";
-
+import riderOnboarding from "./routes/riderOnboarding.js";
+import { riderDashboardRouter } from "./routes/riderDashboard.js";
+import { riderTripsRouter } from "./routes/riderTrips.js";
 
 export function createApp() {
   const app = express();
@@ -57,6 +59,12 @@ app.use("/driver/trips", driverTripsRouter);
 app.use("/driver/dashboard", driverDashboard);
 app.use("/driver/notifications", driverNotificationsRouter);
 app.use("/driver/earnings", driverEarningsRouter);
+
+
+
+app.use("/rider/onboarding", riderOnboarding);
+app.use("/rider/dashboard", riderDashboardRouter);
+app.use("/rider/trips", riderTripsRouter);
   app.use("/health", healthRouter);
   app.use("/auth", authLimiter, authRouter);
   app.use("/me", meRouter);

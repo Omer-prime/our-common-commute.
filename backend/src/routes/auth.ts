@@ -50,7 +50,25 @@ function driverNextPath(step: number, completedAt: Date | null) {
       return "/driver/onboarding/basic-details";
   }
 }
-
+function riderNextPath(step: number, completedAt: Date | null) {
+  if (completedAt) return "/rider/dashboard";
+  switch (step) {
+    case 1:
+      return "/rider/onboarding/basic-details";
+    case 2:
+      return "/rider/onboarding/otp-verification";
+    case 3:
+      return "/rider/onboarding/full-name";
+    case 4:
+      return "/rider/onboarding/location";
+    case 5:
+      return "/rider/onboarding/payment-method";
+    case 6:
+      return "/rider/onboarding/agreement";
+    default:
+      return "/rider/onboarding/basic-details";
+  }
+}
 authRouter.post("/signup", async (req, res) => {
   const input = SignupSchema.safeParse(req.body);
   if (!input.success) {
@@ -95,7 +113,17 @@ authRouter.post("/signup", async (req, res) => {
           profile.onboardingCompletedAt
         );
       }
+      if (user.role === "RIDER") {
+        const profile = await tx.riderProfile.create({
+          data: {
+            userId: user.id,
+            onboardingStep: 1,
+          },
+          select: { onboardingStep: true, onboardingCompletedAt: true },
+        });
 
+        nextPath = riderNextPath(profile.onboardingStep, profile.onboardingCompletedAt);
+      }
       const accessToken = signAccessToken(user.id, user.role);
       const jti = crypto.randomUUID();
       const refreshToken = signRefreshToken(user.id, jti);
@@ -192,7 +220,22 @@ authRouter.post("/login", async (req, res) => {
       nextPath = driverNextPath(profile.onboardingStep, profile.onboardingCompletedAt);
     }
   }
+  if (user.role === "RIDER") {
+    const profile = await prisma.riderProfile.findUnique({
+      where: { userId: user.id },
+      select: { onboardingStep: true, onboardingCompletedAt: true },
+    });
 
+    if (!profile) {
+      const created = await prisma.riderProfile.create({
+        data: { userId: user.id, onboardingStep: 1 },
+        select: { onboardingStep: true, onboardingCompletedAt: true },
+      });
+      nextPath = riderNextPath(created.onboardingStep, created.onboardingCompletedAt);
+    } else {
+      nextPath = riderNextPath(profile.onboardingStep, profile.onboardingCompletedAt);
+    }
+  }
   return res.json({
     user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role },
     accessToken,

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { AuthShell } from "@/src/components/AuthShell";
-import { Button, TextInput } from "@/src/components/ui";
+import SignupForm from "./SignupForm";
 
 export default function SignupPage() {
   return (
@@ -15,24 +15,7 @@ export default function SignupPage() {
           </p>
         </header>
 
-        <form className="flex flex-col gap-4">
-          <TextInput label="Full Name" placeholder="Enter your name" required />
-          <TextInput
-            label="Email Address"
-            type="email"
-            placeholder="Enter your email address"
-            required
-          />
-          <TextInput
-            label="Password"
-            type="password"
-            placeholder="Create a password"
-            required
-          />
-          <Button type="submit" className="mt-2">
-            Continue
-          </Button>
-        </form>
+        <SignupForm />
 
         <p className="text-center text-xs text-slate-500">
           Already have an account?{" "}

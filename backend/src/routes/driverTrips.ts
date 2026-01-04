@@ -1,17 +1,15 @@
-// backend/src/routes/driverTrips.ts
 import { Router } from "express";
+import crypto from "crypto";
 import { prisma } from "../prisma.js";
 import { requireAuth, requireDriver } from "../middleware/auth.js";
 
 export const driverTripsRouter = Router();
 
-/**
- * IMPORTANT:
- * This router is mounted at: app.use("/driver/trips", driverTripsRouter)
- * So DO NOT prefix paths with /driver/trips or /driver/dashboard here.
- */
-
 // -------------------- helpers --------------------
+
+function sha256(input: string) {
+  return crypto.createHash("sha256").update(input).digest("hex");
+}
 
 function safeRiderSelect() {
   return { select: { id: true, fullName: true, email: true } };
@@ -23,7 +21,7 @@ function toRideDTO(trip: any) {
   return {
     id: trip.id,
     bookingId: trip.bookingId,
-    tripType: trip.tripType === "ROUND_TRIP" ? "Round trip" : "On-way",
+    tripType: trip.tripType === "ROUND_TRIP" ? "Round trip" : "One-way",
     status: trip.status,
 
     pickupAddress: trip.pickupAddress,
@@ -48,13 +46,12 @@ function toRequestDTO(trip: any) {
   return { ...dto };
 }
 
-// -------------------- NEW: scope endpoint (fixes your frontend call) --------------------
+// -------------------- scope endpoint (frontend uses it) --------------------
 
 driverTripsRouter.get("/", requireAuth, requireDriver, async (req, res) => {
   const driverId = req.auth!.userId;
   const scope = String(req.query.scope ?? "");
 
-  // requests filters
   const maxDistanceMiles = req.query.maxDistanceMiles ? Number(req.query.maxDistanceMiles) : null;
   const shortTrips = req.query.shortTrips === "1";
 
@@ -102,16 +99,14 @@ driverTripsRouter.get("/", requireAuth, requireDriver, async (req, res) => {
     return res.json({ ok: true, items: items.map(toRequestDTO) });
   }
 
-  // no scope -> help message
   return res.status(400).json({
     error: "BAD_SCOPE",
     details: "Use ?scope=active|upcoming|completed|requests",
   });
 });
 
-// -------------------- Convenience endpoints --------------------
+// -------------------- convenience endpoints --------------------
 
-// all rides at once
 driverTripsRouter.get("/my-rides", requireAuth, requireDriver, async (req, res) => {
   const driverId = req.auth!.userId;
 
@@ -143,7 +138,6 @@ driverTripsRouter.get("/my-rides", requireAuth, requireDriver, async (req, res) 
   });
 });
 
-// requests list
 driverTripsRouter.get("/requests", requireAuth, requireDriver, async (req, res) => {
   const maxDistanceMiles = req.query.maxDistanceMiles ? Number(req.query.maxDistanceMiles) : null;
   const shortTrips = req.query.shortTrips === "1";
@@ -162,7 +156,6 @@ driverTripsRouter.get("/requests", requireAuth, requireDriver, async (req, res) 
   res.json({ ok: true, requests: requests.map(toRequestDTO) });
 });
 
-// accept request
 driverTripsRouter.post("/requests/:tripId/accept", requireAuth, requireDriver, async (req, res) => {
   const driverId = req.auth!.userId;
   const tripId = req.params.tripId;
@@ -189,7 +182,6 @@ driverTripsRouter.post("/requests/:tripId/accept", requireAuth, requireDriver, a
   res.json({ ok: true, trip: toRideDTO(updated) });
 });
 
-// current trip
 driverTripsRouter.get("/current", requireAuth, requireDriver, async (req, res) => {
   const driverId = req.auth!.userId;
 
@@ -202,7 +194,39 @@ driverTripsRouter.get("/current", requireAuth, requireDriver, async (req, res) =
   res.json({ ok: true, trip: toRideDTO(trip) });
 });
 
-// trip details + rider stats
+// -------------------- QR verify (DriverQrModal scan) --------------------
+// driver sends qrToken, we compare hash stored on trip
+
+driverTripsRouter.post("/:tripId/verify-qr", requireAuth, requireDriver, async (req, res) => {
+  const driverId = req.auth!.userId;
+  const tripId = req.params.tripId;
+
+  const qrToken = String(req.body?.qrToken ?? "").trim();
+  if (!qrToken) return res.status(400).json({ error: "QR_TOKEN_REQUIRED" });
+
+  const trip = await prisma.trip.findUnique({ where: { id: tripId } });
+  if (!trip) return res.status(404).json({ error: "NOT_FOUND" });
+  if (trip.driverId !== driverId) return res.status(403).json({ error: "NOT_YOUR_TRIP" });
+
+  if (!(trip as any).qrTokenHash) return res.status(409).json({ error: "NO_QR_SET" });
+
+  const expiresAt = (trip as any).qrTokenExpiresAt as Date | null | undefined;
+  if (expiresAt && expiresAt < new Date()) return res.status(409).json({ error: "QR_EXPIRED" });
+
+  const hash = sha256(qrToken);
+  if (hash !== (trip as any).qrTokenHash) return res.status(401).json({ error: "QR_INVALID" });
+
+  // Optional: move status forward to ARRIVED_PICKUP after successful QR
+  const updated = await prisma.trip.update({
+    where: { id: tripId },
+    data: { status: "ARRIVED_PICKUP" },
+  });
+
+  return res.json({ ok: true, trip: updated });
+});
+
+// -------------------- trip details & flow --------------------
+
 driverTripsRouter.get("/:tripId", requireAuth, requireDriver, async (req, res) => {
   const driverId = req.auth!.userId;
   const tripId = req.params.tripId;
@@ -214,18 +238,18 @@ driverTripsRouter.get("/:tripId", requireAuth, requireDriver, async (req, res) =
   if (!trip) return res.status(404).json({ error: "NOT_FOUND" });
 
   const [totalTrips, avgRating, reviewsCount] = await Promise.all([
-    prisma.trip.count({ where: { riderId: trip.riderId, status: "COMPLETED" } }),
+    prisma.trip.count({ where: { riderId: (trip as any).riderId, status: "COMPLETED" } }),
     prisma.tripReview.aggregate({
-      where: { revieweeId: trip.riderId },
+      where: { revieweeId: (trip as any).riderId },
       _avg: { rating: true },
     }),
-    prisma.tripReview.count({ where: { revieweeId: trip.riderId } }),
+    prisma.tripReview.count({ where: { revieweeId: (trip as any).riderId } }),
   ]);
 
   res.json({
     ok: true,
     trip: toRideDTO(trip),
-    rider: trip.rider,
+    rider: (trip as any).rider,
     riderStats: {
       rating: Number(avgRating._avg.rating ?? 0).toFixed(1),
       totalTrips,
@@ -234,7 +258,6 @@ driverTripsRouter.get("/:tripId", requireAuth, requireDriver, async (req, res) =
   });
 });
 
-// start
 driverTripsRouter.post("/:tripId/start", requireAuth, requireDriver, async (req, res) => {
   const driverId = req.auth!.userId;
   const tripId = req.params.tripId;
@@ -242,26 +265,25 @@ driverTripsRouter.post("/:tripId/start", requireAuth, requireDriver, async (req,
   const trip = await prisma.trip.findFirst({ where: { id: tripId, driverId } });
   if (!trip) return res.status(404).json({ error: "NOT_FOUND" });
 
-  if (!["ACCEPTED", "EN_ROUTE_PICKUP", "ARRIVED_PICKUP"].includes(trip.status)) {
+  if (!["ACCEPTED", "EN_ROUTE_PICKUP", "ARRIVED_PICKUP"].includes((trip as any).status)) {
     return res.status(409).json({ error: "BAD_STATUS" });
   }
 
   const updated = await prisma.trip.update({
     where: { id: tripId },
-    data: { status: "IN_PROGRESS", startedAt: trip.startedAt ?? new Date() },
+    data: { status: "IN_PROGRESS", startedAt: (trip as any).startedAt ?? new Date() },
   });
 
   res.json({ ok: true, trip: updated });
 });
 
-// complete
 driverTripsRouter.post("/:tripId/complete", requireAuth, requireDriver, async (req, res) => {
   const driverId = req.auth!.userId;
   const tripId = req.params.tripId;
 
   const trip = await prisma.trip.findFirst({ where: { id: tripId, driverId } });
   if (!trip) return res.status(404).json({ error: "NOT_FOUND" });
-  if (trip.status !== "IN_PROGRESS") return res.status(409).json({ error: "NOT_IN_PROGRESS" });
+  if ((trip as any).status !== "IN_PROGRESS") return res.status(409).json({ error: "NOT_IN_PROGRESS" });
 
   const updated = await prisma.trip.update({
     where: { id: tripId },
@@ -271,7 +293,6 @@ driverTripsRouter.post("/:tripId/complete", requireAuth, requireDriver, async (r
   res.json({ ok: true, trip: updated });
 });
 
-// cancel + feedback
 driverTripsRouter.post("/:tripId/cancel", requireAuth, requireDriver, async (req, res) => {
   const driverId = req.auth!.userId;
   const tripId = req.params.tripId;
@@ -280,7 +301,7 @@ driverTripsRouter.post("/:tripId/cancel", requireAuth, requireDriver, async (req
 
   const trip = await prisma.trip.findFirst({ where: { id: tripId, driverId } });
   if (!trip) return res.status(404).json({ error: "NOT_FOUND" });
-  if (["COMPLETED", "CANCELLED"].includes(trip.status)) return res.status(409).json({ error: "ALREADY_DONE" });
+  if (["COMPLETED", "CANCELLED"].includes((trip as any).status)) return res.status(409).json({ error: "ALREADY_DONE" });
 
   await prisma.$transaction(async (tx) => {
     await tx.trip.update({
@@ -300,7 +321,6 @@ driverTripsRouter.post("/:tripId/cancel", requireAuth, requireDriver, async (req
   res.json({ ok: true });
 });
 
-// rate rider
 driverTripsRouter.post("/:tripId/rate-rider", requireAuth, requireDriver, async (req, res) => {
   const driverId = req.auth!.userId;
   const tripId = req.params.tripId;
@@ -316,7 +336,7 @@ driverTripsRouter.post("/:tripId/rate-rider", requireAuth, requireDriver, async 
     data: {
       tripId,
       reviewerId: driverId,
-      revieweeId: trip.riderId,
+      revieweeId: (trip as any).riderId,
       rating: Math.round(r),
       text: typeof text === "string" ? text : null,
     },
@@ -325,7 +345,6 @@ driverTripsRouter.post("/:tripId/rate-rider", requireAuth, requireDriver, async 
   res.json({ ok: true, review });
 });
 
-// chat
 driverTripsRouter.get("/:tripId/chat", requireAuth, requireDriver, async (req, res) => {
   const driverId = req.auth!.userId;
   const tripId = req.params.tripId;
@@ -360,7 +379,6 @@ driverTripsRouter.post("/:tripId/chat", requireAuth, requireDriver, async (req, 
   res.json({ ok: true, message });
 });
 
-// notifications
 driverTripsRouter.get("/notifications/list", requireAuth, requireDriver, async (req, res) => {
   const driverId = req.auth!.userId;
 
@@ -373,7 +391,6 @@ driverTripsRouter.get("/notifications/list", requireAuth, requireDriver, async (
   res.json({ ok: true, items });
 });
 
-// sos
 driverTripsRouter.post("/:tripId/sos", requireAuth, requireDriver, async (req, res) => {
   const driverId = req.auth!.userId;
   const tripId = req.params.tripId;

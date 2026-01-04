@@ -28,7 +28,13 @@ enum RideDirection {
   FROM_WORK_ONLY
   BOTH
 }
-
+enum RiderPaymentMethod {
+  APPLE_PAY
+  PAYPAL
+  GPAY
+  CASHAPP
+  CREDIT_CARD
+}
 enum PayoutMethod {
   BANK_ACCOUNT
   MOBILE_WALLET
@@ -152,6 +158,9 @@ model User {
   // who sent the notification (rider/admin/system user)
   sentDriverNotifications DriverNotification[] @relation("DriverNotificationSource")
 
+   riderProfile RiderProfile?
+  riderOnboardingOtps RiderOnboardingOtp[]
+
   // Earnings / Wallet
   driverWallet        DriverWallet?
   payoutMethods       DriverPayoutMethod[]
@@ -231,6 +240,38 @@ model DriverProfile {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+model RiderProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  phone String?
+
+  onboardingStep        Int       @default(1)
+  onboardingCompletedAt DateTime?
+  otpVerifiedAt         DateTime?
+
+  locationText  String?
+  paymentMethod RiderPaymentMethod?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RiderOnboardingOtp {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  otpHash   String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
 
 model Vehicle {
   id       String        @id @default(cuid())
@@ -355,6 +396,11 @@ model Trip {
   cancellations TripCancellation[]
   reviews       TripReview[]
   emergencies   EmergencyAlert[]
+
+  publicShareToken String? @unique
+  qrTokenHash      String? @unique
+  qrTokenIssuedAt DateTime?
+  qrTokenExpiresAt DateTime?
 
   createdAt                 DateTime                   @default(now())
   updatedAt                 DateTime                   @updatedAt

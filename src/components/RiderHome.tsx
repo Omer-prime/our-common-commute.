@@ -13,73 +13,160 @@ import {
   RateDriverModal,
   DriverChatModal,
 } from "@/src/components/rider-modals";
-import { useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { RiderDashboardShell } from "@/src/components/RiderDashboardShell";
-import { ChevronDown } from "lucide-react";
 import { MobileTopSection } from "@/src/components/rider-home";
+import {
+  getRiderHome,
+  estimateTrip,
+  bookTrip,
+  type RiderTripDTO,
+} from "@/src/lib/riderClient";
+import { DriverLiveMap } from "@/src/components/DriverLiveMap";
 
-type TripType = "one-way" | "round-trip";
+// ✅ use the same TripType as your rider-home components
+import { BookingFields } from "@/src/components/rider-home/BookingFields";
+import type { TripType } from "@/src/components/rider-home/types";
 
-const historyItems = [
-  {
-    id: 1,
-    title: "Fashion Store",
-    address: "45, Jos Avenue 3A Crescent",
-    amount: "$40.6",
-  },
-  {
-    id: 2,
-    title: "Home",
-    address: "45, Jos Avenue 3A Crescent",
-    amount: "$34.78",
-  },
-  {
-    id: 3,
-    title: "School",
-    address: "45, Jos Avenue 3A Crescent",
-    amount: "$16.00",
-  },
-  {
-    id: 4,
-    title: "Home",
-    address: "45, Jos Avenue 3A Crescent",
-    amount: "$34.78",
-  },
-];
+type LatLng = { lat: number; lng: number };
 
-const upcomingItems = [
-  {
-    id: 1,
-    title: "Fashion Store",
-    address: "45, Jos Avenue 3A Crescent",
-    date: "23 Nov, 2025",
-  },
-  {
-    id: 2,
-    title: "Fashion Store",
-    address: "45, Jos Avenue 3A Crescent",
-    date: "23 Nov, 2025",
-  },
-  {
-    id: 3,
-    title: "Fashion Store",
-    address: "45, Jos Avenue 3A Crescent",
-    date: "23 Nov, 2025",
-  },
-  {
-    id: 4,
-    title: "Home",
-    address: "45, Jos Avenue 3A Crescent",
-    date: "23 Nov, 2025",
-  },
-];
+type PlaceState = {
+  label: string;
+  coords?: LatLng;
+};
+
+type EstimateState = {
+  fareCents: number;
+  distanceMeters?: number | null;
+  etaSeconds?: number | null;
+  estDurationSeconds?: number | null;
+};
+
+function fmtMoney(n: number) {
+  if (!Number.isFinite(n)) return "$0.00";
+  return `$${n.toFixed(2)}`;
+}
+
+function fmtMoneyFromCents(cents: number) {
+  const v = Number(cents ?? 0);
+  return fmtMoney(v / 100);
+}
+
+function fmtDate(iso: string | null) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function shortTitle(addr: string) {
+  const t = (addr || "").trim();
+  if (!t) return "Destination";
+  const p = t.split(",")[0]?.trim();
+  return p || t;
+}
+
+/** Try to geocode on-client if Google Maps JS is loaded; otherwise return undefined coords */
+async function tryGeocode(address: string): Promise<LatLng | undefined> {
+  try {
+    if (typeof window === "undefined") return undefined;
+    const g = (globalThis as any).google;
+    if (!g?.maps?.Geocoder) return undefined;
+
+    const geocoder = new g.maps.Geocoder();
+    const res = await geocoder.geocode({ address });
+    const loc = res?.results?.[0]?.geometry?.location;
+    if (!loc) return undefined;
+    return { lat: loc.lat(), lng: loc.lng() };
+  } catch {
+    return undefined;
+  }
+}
 
 export function RiderHome() {
   const [tripType, setTripType] = useState<TripType>("one-way");
   const [recurring, setRecurring] = useState(true);
 
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+
+  const [userName, setUserName] = useState<string>("");
+
+  const [activeTrip, setActiveTrip] = useState<RiderTripDTO | null>(null);
+  const [history, setHistory] = useState<RiderTripDTO[]>([]);
+  const [upcoming, setUpcoming] = useState<RiderTripDTO[]>([]);
+
+  const firstName = useMemo(() => {
+    const n = userName.trim();
+    if (!n) return "there";
+    return n.split(" ")[0] || n;
+  }, [userName]);
+
+  // ✅ Real-time booking states
+  const [pickup, setPickup] = useState<PlaceState | null>(null);
+  const [dropoff, setDropoff] = useState<PlaceState | null>(null);
+
+  // leave/arrive times (real time)
+  const [leaveAt, setLeaveAt] = useState<Date | null>(null);
+  const [arriveAt, setArriveAt] = useState<Date | null>(null); // optional for round-trip UI
+
+  // Estimate + booking state
+  const [estimateLoading, setEstimateLoading] = useState(false);
+  const [estimateErr, setEstimateErr] = useState<string | null>(null);
+  const [estimate, setEstimate] = useState<EstimateState | null>(null);
+
+  // load dashboard data
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        setLoading(true);
+        setLoadErr(null);
+
+        const data = await getRiderHome();
+        if (!alive) return;
+
+        setUserName(data.user?.fullName ?? "");
+        setActiveTrip(data.activeTrip);
+        setHistory(data.history ?? []);
+        setUpcoming(data.upcoming ?? []);
+
+        // Seed pickup/dropoff from most recent trip (only if user hasn't selected)
+        const seed = (data.upcoming?.[0] ?? data.history?.[0]) as
+          | RiderTripDTO
+          | undefined;
+
+        if (seed) {
+          setPickup((prev) => prev ?? { label: seed.pickupAddress });
+          setDropoff((prev) => prev ?? { label: seed.destinationAddress });
+        }
+      } catch (e: any) {
+        if (!alive) return;
+        setLoadErr(e?.error ? String(e.error) : "Failed to load dashboard");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // clear estimate when inputs change
+  useEffect(() => {
+    setEstimate(null);
+    setEstimateErr(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickup?.label, dropoff?.label, tripType, recurring, leaveAt?.getTime(), arriveAt?.getTime()]);
+
+  // ----- Modals -----
   const [isFareModalOpen, setIsFareModalOpen] = useState(false);
   const [isBookingConfirmOpen, setIsBookingConfirmOpen] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -93,12 +180,165 @@ export function RiderHome() {
   const [isRateDriverOpen, setIsRateDriverOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
 
-  const openFareModal = () => setIsFareModalOpen(true);
   const closeFareModal = () => setIsFareModalOpen(false);
 
-  const handleBookNow = () => {
-    setIsFareModalOpen(false);
-    setIsBookingConfirmOpen(true);
+  // ===== backend: estimate =====
+  const openFareModal = async () => {
+    const pickupAddress = pickup?.label?.trim() || "";
+    const dropoffAddress = dropoff?.label?.trim() || "";
+
+    setEstimateErr(null);
+
+    if (!pickupAddress || !dropoffAddress) {
+      setEstimateErr("Please select pickup and destination first.");
+      setIsFareModalOpen(true);
+      return;
+    }
+
+    try {
+      setEstimateLoading(true);
+
+      // if coords missing, try geocode and update state so map draws route
+      let pCoords = pickup?.coords;
+      let dCoords = dropoff?.coords;
+
+      if (!pCoords) {
+        const g = await tryGeocode(pickupAddress);
+        if (g) {
+          pCoords = g;
+          setPickup((prev) => (prev ? { ...prev, coords: g } : prev));
+        }
+      }
+      if (!dCoords) {
+        const g = await tryGeocode(dropoffAddress);
+        if (g) {
+          dCoords = g;
+          setDropoff((prev) => (prev ? { ...prev, coords: g } : prev));
+        }
+      }
+
+      const apiTripType = tripType === "round-trip" ? "ROUND_TRIP" : "ONE_WAY";
+
+      const scheduledFor =
+        leaveAt && leaveAt.getTime() > Date.now() + 60_000
+          ? leaveAt.toISOString()
+          : undefined;
+
+      const res = await estimateTrip({
+        tripType: apiTripType,
+        pickupAddress,
+        dropoffAddress,
+        pickupLat: pCoords?.lat,
+        pickupLng: pCoords?.lng,
+        dropoffLat: dCoords?.lat,
+        dropoffLng: dCoords?.lng,
+        scheduledFor,
+        recurring,
+      } as any);
+
+      const payload = (res as any)?.estimate ?? res;
+
+      setEstimate({
+        fareCents: Number(payload?.fareCents ?? 0),
+        distanceMeters: payload?.distanceMeters ?? null,
+        etaSeconds: payload?.etaSeconds ?? null,
+        estDurationSeconds: payload?.estDurationSeconds ?? null,
+      });
+
+      setIsFareModalOpen(true);
+    } catch (e: any) {
+      setEstimateErr(e?.error ? String(e.error) : "Failed to estimate ride");
+      setIsFareModalOpen(true);
+    } finally {
+      setEstimateLoading(false);
+    }
+  };
+
+  // ===== backend: book =====
+  const handleBookNow = async () => {
+    const pickupAddress = pickup?.label?.trim() || "";
+    const dropoffAddress = dropoff?.label?.trim() || "";
+
+    if (!pickupAddress || !dropoffAddress) {
+      setEstimateErr("Please select pickup and destination first.");
+      return;
+    }
+    if (!estimate) {
+      setEstimateErr("Please get estimate first.");
+      return;
+    }
+
+    try {
+      const apiTripType = tripType === "round-trip" ? "ROUND_TRIP" : "ONE_WAY";
+
+      const scheduledFor =
+        leaveAt && leaveAt.getTime() > Date.now() + 60_000
+          ? leaveAt.toISOString()
+          : undefined;
+
+      const res = await bookTrip({
+        tripType: apiTripType,
+        pickupAddress,
+        dropoffAddress,
+        pickupLat: pickup?.coords?.lat,
+        pickupLng: pickup?.coords?.lng,
+        dropoffLat: dropoff?.coords?.lat,
+        dropoffLng: dropoff?.coords?.lng,
+        scheduledFor,
+        fareCents: estimate.fareCents,
+        distanceMeters: estimate.distanceMeters ?? undefined,
+        recurring,
+      } as any);
+
+      const trip = (res as any)?.trip ?? (res as any)?.data?.trip ?? null;
+      if (trip) setActiveTrip(trip);
+
+      setIsFareModalOpen(false);
+      setIsBookingConfirmOpen(true);
+    } catch (e: any) {
+      setEstimateErr(e?.error ? String(e.error) : "Booking failed");
+      setIsFareModalOpen(true);
+    }
+  };
+
+  // ===== schedule ride =====
+  const handleScheduleRide = async () => {
+    const pickupAddress = pickup?.label?.trim() || "";
+    const dropoffAddress = dropoff?.label?.trim() || "";
+
+    if (!pickupAddress || !dropoffAddress) {
+      setEstimateErr("Please select pickup and destination first.");
+      return;
+    }
+    if (!leaveAt) {
+      setEstimateErr("Please select a 'Leave at' time to schedule.");
+      return;
+    }
+    if (leaveAt.getTime() < Date.now() + 60_000) {
+      setEstimateErr("Leave time must be at least 1 minute in the future.");
+      return;
+    }
+
+    try {
+      const apiTripType = tripType === "round-trip" ? "ROUND_TRIP" : "ONE_WAY";
+
+      const res = await bookTrip({
+        tripType: apiTripType,
+        pickupAddress,
+        dropoffAddress,
+        pickupLat: pickup?.coords?.lat,
+        pickupLng: pickup?.coords?.lng,
+        dropoffLat: dropoff?.coords?.lat,
+        dropoffLng: dropoff?.coords?.lng,
+        scheduledFor: leaveAt.toISOString(),
+        recurring,
+      } as any);
+
+      const trip = (res as any)?.trip ?? (res as any)?.data?.trip ?? null;
+      if (trip) setUpcoming((prev) => [trip, ...prev]);
+    } catch (e: any) {
+      setEstimateErr(e?.error ? String(e.error) : "Failed to schedule ride");
+    }
   };
 
   const handleShareFromConfirmation = () => {
@@ -116,48 +356,66 @@ export function RiderHome() {
     setIsDriverArrivalOpen(true);
   };
 
-  const openDriverArrival = () => setIsDriverArrivalOpen(true);
-  const closeDriverArrival = () => setIsDriverArrivalOpen(false);
-
-  const openDriverQr = () => setIsDriverQrOpen(true);
-  const closeDriverQr = () => setIsDriverQrOpen(false);
-
-  const openCancelFeedback = () => setIsCancelFeedbackOpen(true);
-  const closeCancelFeedback = () => setIsCancelFeedbackOpen(false);
-
   const handleSubmitCancelFeedback = () => {
     setIsCancelFeedbackOpen(false);
     setIsDriverArrivalOpen(false);
   };
 
+  const canEstimate = Boolean(pickup?.label?.trim() && dropoff?.label?.trim());
+
   return (
     <RiderDashboardShell>
       <div className="space-y-5">
-        {/* ===== MOBILE TOP SECTION (unchanged – keeps old mobile map) ===== */}
+        {loadErr ? (
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">
+            {loadErr}
+          </div>
+        ) : null}
+
+        {estimateErr ? (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+            {estimateErr}
+          </div>
+        ) : null}
+
+        {/* Mobile */}
         <div className="lg:hidden">
-          <MobileTopSection
-            tripType={tripType}
-            setTripType={setTripType}
-            recurring={recurring}
-            toggleRecurring={() => setRecurring((v) => !v)}
-            openFareModal={openFareModal}
-          />
+         <MobileTopSection
+  tripType={tripType}
+  setTripType={setTripType}
+  recurring={recurring}
+  toggleRecurring={() => setRecurring((v) => !v)}
+  openFareModal={openFareModal}
+  pickup={pickup}
+  dropoff={dropoff}
+  leaveAt={leaveAt}
+  arriveAt={arriveAt}
+  onPickupChange={async (p) => {
+    const coords = p.coords ?? (p.label ? await tryGeocode(p.label) : undefined);
+    setPickup({ label: p.label, coords });
+  }}
+  onDropoffChange={async (p) => {
+    const coords = p.coords ?? (p.label ? await tryGeocode(p.label) : undefined);
+    setDropoff({ label: p.label, coords });
+  }}
+  onLeaveAtChange={setLeaveAt}
+  onArriveAtChange={setArriveAt}
+/>
         </div>
 
-        {/* ========= DESKTOP/TABLET TOP: NEW MAP + FORM (FIGMA LAYOUT) ========= */}
+        {/* Desktop */}
         <section className="hidden rounded-2xl border border-[#233358] bg-[#050f25] p-5 lg:block lg:p-6">
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1.1fr)]">
-            {/* MAP COLUMN (desktop only) */}
+            {/* MAP */}
             <div className="relative min-h-[360px] overflow-hidden rounded-2xl border border-[#233358] bg-[#0b1735]">
-              <Image
-                src="/new-map.png" // new desktop map asset
-                alt="Route map"
-                fill
-                priority
-                className="object-cover"
-              />
+              <div className="absolute inset-0">
+                <DriverLiveMap
+                  pickup={pickup?.coords ?? null}
+                  dropoff={dropoff?.coords ?? null}
+                  showRoute={Boolean(pickup?.coords && dropoff?.coords)}
+                />
+              </div>
 
-              {/* Small map controls in top-right (icons you shared) */}
               <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-4">
                 <div className="flex justify-end gap-2">
                   <div className="pointer-events-auto flex flex-col gap-2">
@@ -165,51 +423,38 @@ export function RiderHome() {
                       type="button"
                       className="flex h-8 w-8 items-center justify-center rounded-full bg-[#243456]/90 shadow"
                     >
-                      <Image
-                        src="/arrow-head.png"
-                        alt="Navigate"
-                        width={16}
-                        height={16}
-                      />
+                      <Image src="/arrow-head.png" alt="Navigate" width={16} height={16} />
                     </button>
                     <button
                       type="button"
                       className="flex h-8 w-8 items-center justify-center rounded-full bg-[#243456]/90 shadow"
                     >
-                      <Image
-                        src="/fashion.png"
-                        alt="Center"
-                        width={16}
-                        height={16}
-                      />
+                      <Image src="/fashion.png" alt="Center" width={16} height={16} />
                     </button>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* BOOKING COLUMN */}
+            {/* BOOKING */}
             <div className="flex flex-col justify-between gap-4">
               <div className="space-y-4">
-                {/* Heading */}
                 <div>
                   <h2 className="text-sm font-semibold text-slate-50">
-                    Hello Daniel, where would you like to go
+                    Hello {firstName}, where would you like to go
                   </h2>
                   <p className="mt-1 text-[11px] text-slate-400">
                     Choose your preferred destination
                   </p>
                 </div>
 
-                {/* Trip type toggle (One-way / Round trip) */}
+                {/* Trip type toggle */}
                 <div className="inline-flex w-full rounded-xl bg-[#101a33] p-1 text-xs">
                   <button
                     type="button"
                     onClick={() => setTripType("one-way")}
                     className={`flex-1 rounded-lg py-2 font-medium ${
-                      tripType === "one-way"
-                        ? "bg-[#1d4ed8] text-white"
-                        : "text-slate-300"
+                      tripType === "one-way" ? "bg-[#1d4ed8] text-white" : "text-slate-300"
                     }`}
                   >
                     One-way
@@ -218,128 +463,73 @@ export function RiderHome() {
                     type="button"
                     onClick={() => setTripType("round-trip")}
                     className={`flex-1 rounded-lg py-2 font-medium ${
-                      tripType === "round-trip"
-                        ? "bg-[#1d4ed8] text-white"
-                        : "text-slate-300"
+                      tripType === "round-trip" ? "bg-[#1d4ed8] text-white" : "text-slate-300"
                     }`}
                   >
                     Round trip
                   </button>
                 </div>
 
-                {/* Booking rows */}
-                <div className="space-y-3">
-                  <BookingRow
-                    icon={
-                      <Image
-                        src="/pickup.png"
-                        alt="Pickup"
-                        width={18}
-                        height={18}
-                        className="h-4 w-4 object-contain"
-                      />
-                    }
-                    label="Pickup location"
-                    value="Home"
-                  />
-                  <BookingRow
-                    icon={
-                      <Image
-                        src="/work.png"
-                        alt="Destination"
-                        width={18}
-                        height={18}
-                        className="h-4 w-4 object-contain"
-                      />
-                    }
-                    label="Destination"
-                    value="Work"
-                  />
-                  <BookingRow
-                    icon={
-                      <Image
-                        src="/leaving.png"
-                        alt="Leave at"
-                        width={18}
-                        height={18}
-                        className="h-4 w-4 object-contain"
-                      />
-                    }
-                    label="Leave at"
-                    value="23 Nov, 2025"
-                    compact
-                  />
-                  {/* This row changes when Round trip is selected */}
-                  <BookingRow
-                    icon={
-                      tripType === "round-trip" ? (
-                        <Image
-                          src="/leaving.png"
-                          alt="Arrive at"
-                          width={18}
-                          height={18}
-                          className="h-4 w-4 object-contain"
-                        />
-                      ) : (
-                        <Image
-                          src="/arrow-head.png"
-                          alt="Time"
-                          width={18}
-                          height={18}
-                          className="h-4 w-4 object-contain"
-                        />
-                      )
-                    }
-                    label={tripType === "round-trip" ? "Arrive at" : "Time"}
-                    value={tripType === "round-trip" ? "23 Nov, 2025" : "09:15 AM"}
-                    compact
-                  />
+                {/* ✅ real-time booking fields (popover UI) */}
+                <BookingFields
+                  tripType={tripType}
+                  recurring={recurring}
+                  toggleRecurring={() => setRecurring((v) => !v)}
+                  pickup={pickup}
+                  dropoff={dropoff}
+                  leaveAt={leaveAt}
+                  arriveAt={arriveAt}
+                  onPickupChange={async (p) => {
+                    const coords = p.coords ?? (p.label ? await tryGeocode(p.label) : undefined);
+                    setPickup({ label: p.label, coords });
+                  }}
+                  onDropoffChange={async (p) => {
+                    const coords = p.coords ?? (p.label ? await tryGeocode(p.label) : undefined);
+                    setDropoff({ label: p.label, coords });
+                  }}
+                  onLeaveAtChange={(d) => setLeaveAt(d)}
+                  onArriveAtChange={(d) => setArriveAt(d)}
+                />
+
+                {/* Status row */}
+                <div className="flex items-center gap-3 rounded-xl border border-[#233358] bg-[#1a2d51] px-3 py-2.5">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#111e3c]">
+                    <Image src="/arrow-head.png" alt="Status" width={18} height={18} className="h-4 w-4 object-contain" />
+                  </div>
+                  <div className="flex-1 text-xs">
+                    <div className="text-[11px] text-slate-300">Status</div>
+                    <div className="mt-0.5 text-slate-100">
+                      {activeTrip ? activeTrip.status : "No active ride"}
+                    </div>
+                  </div>
                 </div>
 
-                {/* Make this recurring */}
-                <div className="flex items-center justify-between rounded-xl bg-[#101a33] px-3 py-2.5 text-xs">
-                  <div className="flex items-center gap-2">
-                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#111e3c]">
-                      <Image
-                        src="/new-pin.png"
-                        alt="Recurring"
-                        width={14}
-                        height={14}
-                        className="h-3.5 w-3.5 object-contain"
-                      />
-                    </span>
-                    <span className="text-[11px] font-medium text-slate-100">
-                      Make this recurring
+                {/* Quick estimate preview */}
+                {estimate ? (
+                  <div className="rounded-xl border border-[#233358] bg-[#0b1735] px-3 py-2 text-xs text-slate-200">
+                    Estimated fare:{" "}
+                    <span className="font-semibold text-slate-50">
+                      {fmtMoneyFromCents(estimate.fareCents)}
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setRecurring((v) => !v)}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                      recurring ? "bg-[#1d4ed8]" : "bg-slate-600"
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
-                        recurring ? "translate-x-4" : "translate-x-1"
-                      }`}
-                    />
-                  </button>
-                </div>
+                ) : null}
               </div>
 
-              {/* Primary actions */}
               <div className="space-y-2">
                 <button
                   type="button"
                   onClick={openFareModal}
-                  className="w-full rounded-lg bg-[#1d4ed8] py-2.5 text-sm font-semibold text-white hover:bg-[#2563eb]"
+                  className="w-full rounded-lg bg-[#1d4ed8] py-2.5 text-sm font-semibold text-white hover:bg-[#2563eb] disabled:opacity-60"
+                  disabled={loading || estimateLoading || !canEstimate}
                 >
-                  Get estimate
+                  {loading || estimateLoading ? "Loading..." : "Get estimate"}
                 </button>
+
                 <button
                   type="button"
-                  className="w-full rounded-lg border border-[#1d4ed8] bg-transparent py-2.5 text-sm font-semibold text-slate-100 hover:bg-[#1d4ed8]/10"
+                  onClick={handleScheduleRide}
+                  className="w-full rounded-lg border border-[#1d4ed8] bg-transparent py-2.5 text-sm font-semibold text-slate-100 hover:bg-[#1d4ed8]/10 disabled:opacity-60"
+                  disabled={!canEstimate}
                 >
                   Schedule ride
                 </button>
@@ -348,62 +538,73 @@ export function RiderHome() {
           </div>
         </section>
 
-        {/* ========= BOTTOM: HISTORY + UPCOMING ========= */}
+        {/* Bottom: history + upcoming */}
         <section className="grid gap-4 lg:grid-cols-2">
-          {/* History */}
           <div className="rounded-2xl border border-[#233358] bg-[#101a33] p-4">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-slate-50">History</h3>
-              <Link
-                href="/rider/dashboard/my-rides"
-                className="text-xs font-medium text-blue-400 hover:underline"
-              >
+              <Link href="/rider/dashboard/my-rides" className="text-xs font-medium text-blue-400 hover:underline">
                 See All
               </Link>
             </div>
-            <div className="divide-y divide-[#233358] text-xs">
-              {historyItems.map((item) => (
-                <RideRow
-                  key={item.id}
-                  title={item.title}
-                  address={item.address}
-                  right={item.amount}
-                />
-              ))}
-            </div>
+
+            {history.length === 0 ? (
+              <div className="rounded-xl border border-[#233358] bg-[#0b1735] p-4 text-xs text-slate-300">
+                No completed rides yet.
+              </div>
+            ) : (
+              <div className="divide-y divide-[#233358] text-xs">
+                {history.map((t) => (
+                  <RideRow
+                    key={t.id}
+                    title={shortTitle(t.destinationAddress)}
+                    address={t.pickupAddress}
+                    right={fmtMoney((t as any).fare ?? 0)}
+                  />
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Upcoming rides */}
           <div className="rounded-2xl border border-[#233358] bg-[#101a33] p-4">
             <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-50">
-                Upcoming ride
-              </h3>
-              <Link
-                href="/rider/dashboard/my-rides"
-                className="text-xs font-medium text-blue-400 hover:underline"
-              >
+              <h3 className="text-sm font-semibold text-slate-50">Upcoming ride</h3>
+              <Link href="/rider/dashboard/my-rides" className="text-xs font-medium text-blue-400 hover:underline">
                 See All
               </Link>
             </div>
-            <div className="divide-y divide-[#233358] text-xs">
-              {upcomingItems.map((item) => (
-                <RideRow
-                  key={item.id}
-                  title={item.title}
-                  address={item.address}
-                  right={item.date}
-                />
-              ))}
-            </div>
+
+            {upcoming.length === 0 ? (
+              <div className="rounded-xl border border-[#233358] bg-[#0b1735] p-4 text-xs text-slate-300">
+                No upcoming rides scheduled.
+              </div>
+            ) : (
+              <div className="divide-y divide-[#233358] text-xs">
+                {upcoming.map((t) => (
+                  <RideRow
+                    key={t.id}
+                    title={shortTitle(t.destinationAddress)}
+                    address={t.pickupAddress}
+                    right={t.scheduledFor ? fmtDate(t.scheduledFor) : "—"}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </section>
       </div>
 
-      {/* ========= MODALS ========= */}
-
+      {/* MODALS */}
       {isFareModalOpen && (
-        <FareEstimateModal onClose={closeFareModal} onBook={handleBookNow} />
+        <FareEstimateModal
+          onClose={closeFareModal}
+          onBook={handleBookNow}
+          estimate={estimate}
+          pickupAddress={pickup?.label || ""}
+          dropoffAddress={dropoff?.label || ""}
+          tripTypeLabel={tripType === "round-trip" ? "Round trip" : "One-way"}
+          dateTimeLabel={leaveAt ? leaveAt.toLocaleDateString() : "Now"}
+        />
       )}
 
       {isBookingConfirmOpen && (
@@ -418,9 +619,9 @@ export function RiderHome() {
 
       {isDriverArrivalOpen && (
         <DriverArrivalModal
-          onClose={closeDriverArrival}
-          onOpenQr={openDriverQr}
-          onCancelRide={openCancelFeedback}
+          onClose={() => setIsDriverArrivalOpen(false)}
+          onOpenQr={() => setIsDriverQrOpen(true)}
+          onCancelRide={() => setIsCancelFeedbackOpen(true)}
           onStartTrip={() => {
             setIsDriverArrivalOpen(false);
             setIsInTripOpen(true);
@@ -432,11 +633,11 @@ export function RiderHome() {
         />
       )}
 
-      {isDriverQrOpen && <DriverQrModal onClose={closeDriverQr} />}
+      {isDriverQrOpen && <DriverQrModal onClose={() => setIsDriverQrOpen(false)} />}
 
       {isCancelFeedbackOpen && (
         <CancelRideFeedbackModal
-          onClose={closeCancelFeedback}
+          onClose={() => setIsCancelFeedbackOpen(false)}
           onSubmit={handleSubmitCancelFeedback}
         />
       )}
@@ -454,20 +655,13 @@ export function RiderHome() {
       )}
 
       {isEmergencyOpen && (
-        <EmergencyAlertModal
-          onClose={() => setIsEmergencyOpen(false)}
-          onCallEmergency={() => {
-            // hook into native call / emergency flow later
-          }}
-        />
+        <EmergencyAlertModal onClose={() => setIsEmergencyOpen(false)} onCallEmergency={() => {}} />
       )}
 
       {isEndTripOpen && (
         <EndTripConfirmationModal
           onClose={() => setIsEndTripOpen(false)}
-          onReportIssue={() => {
-            setIsEndTripOpen(false);
-          }}
+          onReportIssue={() => setIsEndTripOpen(false)}
           onRateDriver={() => {
             setIsEndTripOpen(false);
             setIsRateDriverOpen(true);
@@ -490,53 +684,13 @@ export function RiderHome() {
   );
 }
 
-/* ---------- SHARED SMALL COMPONENTS ---------- */
-
-type BookingRowProps = {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  compact?: boolean;
-};
-
-function BookingRow({ icon, label, value, compact }: BookingRowProps) {
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-[#233358] bg-[#1a2d51] px-3 py-2.5">
-      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#111e3c]">
-        {icon}
-      </div>
-      <div className="flex-1 text-xs">
-        <div className="text-[11px] text-slate-300">{label}</div>
-        <div className="mt-0.5 text-slate-100">{value}</div>
-      </div>
-      {!compact && (
-        <button className="inline-flex items-center gap-1 rounded-md border border-[#233358] bg-[#101a33] px-3 py-[6px] text-[11px] text-slate-200">
-          Home
-          <ChevronDown className="h-3 w-3 text-slate-400" />
-        </button>
-      )}
-    </div>
-  );
-}
-
-type RideRowProps = {
-  title: string;
-  address: string;
-  right: string;
-};
-
-function RideRow({ title, address, right }: RideRowProps) {
+/* ---------- Small row for history list ---------- */
+function RideRow({ title, address, right }: { title: string; address: string; right: string }) {
   return (
     <div className="flex items-center justify-between gap-3 py-2.5">
       <div className="flex items-center gap-3">
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#111e3c]">
-          <Image
-            src="/fashion.png"
-            alt=""
-            width={16}
-            height={16}
-            className="h-4 w-4 object-contain"
-          />
+          <Image src="/fashion.png" alt="" width={16} height={16} className="h-4 w-4 object-contain" />
         </div>
         <div>
           <div className="text-xs font-medium text-slate-50">{title}</div>

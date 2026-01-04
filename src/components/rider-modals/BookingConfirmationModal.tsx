@@ -1,19 +1,51 @@
-import React from "react";
+// src/components/rider-modals/BookingConfirmationModal.tsx
+import React, { useMemo } from "react";
 import { CheckCircle2, X } from "lucide-react";
 import { Button } from "../ui";
+import type { RiderTripDTO } from "../../lib/riderClient";
 
 type BookingConfirmationModalProps = {
   onClose: () => void;
   onShare: () => void;
   onGoToRides: () => void;
+
+  // ✅ real backend trip (required, but we still guard)
+  trip: RiderTripDTO | null;
 };
+
+function formatDateTime(iso: string | null) {
+  if (!iso) return "Now";
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, {
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function tripTypeLabel(t: RiderTripDTO["tripType"] | null | undefined) {
+  if (t === "ROUND_TRIP") return "Round trip";
+  return "One-way";
+}
+
+function shortBookingId(trip: RiderTripDTO | null) {
+  if (!trip) return "—";
+  return trip.bookingId ? `#${trip.bookingId}` : `#${trip.id.slice(0, 8)}`;
+}
 
 export function BookingConfirmationModal({
   onClose,
   onShare,
   onGoToRides,
+  trip,
 }: BookingConfirmationModalProps) {
   const stop = (e: React.MouseEvent<HTMLDivElement>) => e.stopPropagation();
+
+  const dateTime = useMemo(() => formatDateTime(trip?.scheduledFor ?? null), [trip?.scheduledFor]);
+  const tType = useMemo(() => tripTypeLabel(trip?.tripType), [trip?.tripType]);
+  const booking = useMemo(() => shortBookingId(trip), [trip]);
 
   return (
     <div
@@ -47,9 +79,7 @@ export function BookingConfirmationModal({
             Your ride is booked!
           </div>
           <div className="mt-1 text-[11px] leading-relaxed text-slate-400">
-            We&apos;ll notify you once a driver accepts. This can
-            <br className="hidden sm:block" />
-            take up to 5 minutes before your shift time.
+            We&apos;ll notify you once a driver accepts.
           </div>
         </div>
 
@@ -60,28 +90,28 @@ export function BookingConfirmationModal({
             <div className="mb-2 text-[11px] font-medium text-slate-300">
               Trip details
             </div>
+
             <div className="grid gap-4 sm:grid-cols-3">
               <div>
                 <div className="text-[11px] text-slate-400">Date &amp; time</div>
-                <div className="mt-0.5 text-xs text-slate-100">
-                  12-11-25, 9:50 AM
-                </div>
+                <div className="mt-0.5 text-xs text-slate-100">{dateTime}</div>
               </div>
+
               <div>
                 <div className="text-[11px] text-slate-400">Trip type</div>
-                <div className="mt-0.5 text-xs text-slate-100">One-way</div>
+                <div className="mt-0.5 text-xs text-slate-100">{tType}</div>
               </div>
+
               <div>
                 <div className="text-[11px] text-slate-400">Booking ID</div>
-                <div className="mt-0.5 text-xs text-slate-100">#36451923</div>
+                <div className="mt-0.5 text-xs text-slate-100">{booking}</div>
               </div>
             </div>
           </div>
 
-          {/* Steps */}
+          {/* Steps (static for now) */}
           <div className="px-4 py-3">
             <div className="space-y-3">
-              {/* Step 1 */}
               <div className="flex gap-3">
                 <div className="flex flex-col items-center">
                   <span className="flex h-4 w-4 items-center justify-center rounded-full bg-[#0B63F4]">
@@ -91,11 +121,10 @@ export function BookingConfirmationModal({
                 </div>
                 <div>
                   <div className="text-[11px] text-slate-400">Step 1</div>
-                  <div className="text-xs text-slate-100">Payment complete</div>
+                  <div className="text-xs text-slate-100">Booking created</div>
                 </div>
               </div>
 
-              {/* Step 2 */}
               <div className="flex gap-3">
                 <div className="flex flex-col items-center">
                   <span className="flex h-4 w-4 items-center justify-center rounded-full border border-slate-500 bg-transparent" />
@@ -103,13 +132,10 @@ export function BookingConfirmationModal({
                 </div>
                 <div>
                   <div className="text-[11px] text-slate-400">Step 2</div>
-                  <div className="text-xs text-slate-300">
-                    Matching with drivers
-                  </div>
+                  <div className="text-xs text-slate-300">Matching with drivers</div>
                 </div>
               </div>
 
-              {/* Step 3 */}
               <div className="flex gap-3">
                 <div className="flex flex-col items-center">
                   <span className="flex h-4 w-4 items-center justify-center rounded-full border border-slate-500 bg-transparent" />
@@ -137,6 +163,7 @@ export function BookingConfirmationModal({
               type="button"
               className="h-11 w-full rounded-lg bg-[#0B63F4] text-sm font-semibold shadow-[0_18px_40px_rgba(0,0,0,0.6)] hover:bg-[#1a74ff]"
               onClick={onShare}
+              disabled={!trip}
             >
               Share booking
             </Button>
