@@ -1,47 +1,69 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { AuthShell } from "@/src/components/AuthShell";
 import { Button, TextInput } from "@/src/components/ui";
+import { login } from "@/src/lib/authClient";
 
 export default function AdminLoginPage() {
+  const router = useRouter();
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+
+    try {
+      await login({ email, password, role: "ADMIN" });
+      router.push("/admin/dashboard");
+    } catch (err: any) {
+      setError(err?.error ?? "Login failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <AuthShell>
       <div className="space-y-8">
-        {/* Heading */}
         <header className="text-center space-y-2">
-          <h1 className="text-xl font-semibold text-slate-900">
-            Welcome Back
-          </h1>
-          <p className="text-xs text-slate-500">
-            Sign in to access your admin dashboard.
-          </p>
+          <h1 className="text-xl font-semibold text-slate-900">Welcome Back</h1>
+          <p className="text-xs text-slate-500">Sign in to access your admin dashboard.</p>
         </header>
 
-        {/* Form */}
-        <form className="space-y-4">
+        <form className="space-y-4" onSubmit={onSubmit}>
           <TextInput
             label="Email Address"
             type="email"
             placeholder="Enter your Email Address"
             required
+            value={email}
+            onChange={(e: any) => setEmail(e.target.value)}
           />
           <TextInput
             label="Password"
             type="password"
             placeholder="Enter your password"
             required
+            value={password}
+            onChange={(e: any) => setPassword(e.target.value)}
           />
 
-          {/* For now just navigate on click instead of real auth */}
-          <Link href="/admin/dashboard" className="block w-full">
-            <Button type="button" className="w-full">
-              Sign in
-            </Button>
-          </Link>
+          {error ? <p className="text-xs text-red-600">{error}</p> : null}
+
+          <Button type="submit" className="w-full" disabled={loading}>
+            {loading ? "Signing in..." : "Sign in"}
+          </Button>
         </form>
 
-        {/* Footer links */}
         <div className="pt-2 text-center text-xs text-slate-500">
           <Link href="/admin/reset-password" className="hover:underline">
             Forgot password

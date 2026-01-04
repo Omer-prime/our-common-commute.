@@ -1,28 +1,30 @@
 "use client";
 
 import { useState, FormEvent } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AuthShell } from "@/src/components/AuthShell";
 import { Button } from "@/src/components/ui";
+import { forgotPassword, verifyResetOtp } from "@/src/lib/authClient";
 
 const OTP_LENGTH = 6;
 
 export default function OtpVerificationPage() {
-  const [values, setValues] = useState<string[]>(
-    Array(OTP_LENGTH).fill("")
-  );
+  const router = useRouter();
+  const [values, setValues] = useState<string[]>(Array(OTP_LENGTH).fill(""));
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const email =
+    typeof window !== "undefined" ? sessionStorage.getItem("occ_reset_email") : null;
 
   const handleChange = (index: number, e: React.ChangeEvent<HTMLInputElement>) => {
     const { value } = e.target;
-
-    // allow only one digit
     if (!/^\d?$/.test(value)) return;
 
     const next = [...values];
     next[index] = value;
     setValues(next);
 
-    // move focus to next input if filled
     if (value && e.target.nextElementSibling instanceof HTMLInputElement) {
       e.target.nextElementSibling.focus();
     }
@@ -30,27 +32,57 @@ export default function OtpVerificationPage() {
 
   const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Backspace" && !values[index]) {
-      // go back if current empty
       if (e.currentTarget.previousElementSibling instanceof HTMLInputElement) {
         e.currentTarget.previousElementSibling.focus();
       }
     }
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    const code = values.join("");
-    // later: send code to backend
-    console.log("OTP:", code);
+    setError(null);
+
+    if (!email) {
+      setError("Email not found. Please restart reset flow.");
+      return;
+    }
+
+    const otp = values.join("");
+    if (otp.length !== 6) {
+      setError("Enter the full 6-digit code.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await verifyResetOtp(email, otp);
+      sessionStorage.setItem("occ_reset_token", res.resetToken);
+      router.push("/reset-password/new");
+    } catch (err: any) {
+      setError(err?.error ?? "Invalid OTP");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resend = async () => {
+    setError(null);
+    if (!email) return setError("Email not found. Go back and enter your email again.");
+    setLoading(true);
+    try {
+      await forgotPassword(email);
+    } catch (err: any) {
+      setError(err?.error ?? "Failed to resend");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <AuthShell variant="pattern">
       <form onSubmit={handleSubmit} className="flex flex-col gap-6">
         <header className="text-center space-y-1">
-          <h1 className="text-2xl font-semibold text-slate-900">
-            OTP Verification
-          </h1>
+          <h1 className="text-2xl font-semibold text-slate-900">OTP Verification</h1>
           <p className="text-xs text-slate-500 max-w-sm mx-auto">
             Enter the OTP code that was sent to your email address.
           </p>
@@ -71,16 +103,15 @@ export default function OtpVerificationPage() {
           ))}
         </div>
 
-        <Button type="submit" className="mt-2">
-          Continue
+        {error ? <p className="text-center text-xs text-red-600">{error}</p> : null}
+
+        <Button type="submit" className="mt-2" disabled={loading}>
+          {loading ? "Verifying..." : "Continue"}
         </Button>
 
         <p className="text-center text-xs text-slate-500">
           Didn&apos;t receive code?{" "}
-          <button
-            type="button"
-            className="font-medium text-blue-600 hover:underline"
-          >
+          <button type="button" onClick={resend} className="font-medium text-blue-600 hover:underline">
             Resend code
           </button>
         </p>

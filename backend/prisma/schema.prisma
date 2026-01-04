@@ -1,0 +1,610 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/**
+ * ------------------------------ Enums ------------------------------
+ */
+
+enum Role {
+  DRIVER
+  RIDER
+  ADMIN
+}
+
+enum NotificationSource {
+  RIDER
+  ADMIN
+  SYSTEM
+}
+
+enum RideDirection {
+  TO_WORK_ONLY
+  FROM_WORK_ONLY
+  BOTH
+}
+
+enum PayoutMethod {
+  BANK_ACCOUNT
+  MOBILE_WALLET
+  PAYPAL
+}
+
+enum DriverStatus {
+  ACTIVE
+  INACTIVE
+  OCCUPIED
+}
+
+enum TripStatus {
+  REQUESTED
+  ACCEPTED
+  EN_ROUTE_PICKUP
+  ARRIVED_PICKUP
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TripType {
+  ONE_WAY
+  ROUND_TRIP
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+  REFUNDED
+}
+
+/**
+ * ----------------------- Profile / Support Enums -----------------------
+ */
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum WorkChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum SupportChannel {
+  CHAT
+  EMAIL
+}
+
+enum SupportAuthor {
+  DRIVER
+  AGENT
+}
+
+/**
+ * ----------------------- Earnings Enums -----------------------
+ */
+
+enum EarningTransactionType {
+  RIDE_EARNING
+  CASH_TIP
+  WITHDRAWAL
+  REFERRAL
+  ADJUSTMENT
+}
+
+enum EarningDirection {
+  CREDIT
+  DEBIT
+}
+
+enum WithdrawalStatus {
+  PENDING
+  PROCESSING
+  PAID
+  REJECTED
+  FAILED
+  CANCELLED
+}
+
+/**
+ * ------------------------------ Core ------------------------------
+ */
+
+model User {
+  id           String @id @default(cuid())
+  fullName     String
+  email        String @unique
+  passwordHash String
+  role         Role   @default(RIDER)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  refreshTokens     RefreshToken[]
+  passwordResetOtps PasswordResetOtp[]
+
+  driverProfile DriverProfile?
+
+  riderTrips  Trip[] @relation("RiderTrips")
+  driverTrips Trip[] @relation("DriverTrips")
+
+  sentTripMessages TripMessage[] @relation("TripMessageSender")
+
+  tripCancellations TripCancellation[] @relation("TripCancellationBy")
+
+  tripReviewsWritten  TripReview[] @relation("TripReviewReviewer")
+  tripReviewsReceived TripReview[] @relation("TripReviewReviewee")
+
+  driverNotifications DriverNotification[] @relation("DriverNotifications")
+
+  emergencyAlerts EmergencyAlert[] @relation("DriverEmergencyAlerts")
+
+  supportConversations SupportConversation[] @relation("DriverSupportConversations")
+
+  // who sent the notification (rider/admin/system user)
+  sentDriverNotifications DriverNotification[] @relation("DriverNotificationSource")
+
+  // Earnings / Wallet
+  driverWallet        DriverWallet?
+  payoutMethods       DriverPayoutMethod[]
+  earningTransactions DriverEarningTransaction[]
+  withdrawalRequests  DriverWithdrawalRequest[]
+}
+
+model RefreshToken {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model PasswordResetOtp {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  otpHash   String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model DriverProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  phone String?
+
+  onboardingStep        Int       @default(1)
+  onboardingCompletedAt DateTime?
+
+  driverStatus DriverStatus @default(INACTIVE)
+
+  primaryWorkLocation String?
+  workDays            String[] @default([])
+  shiftStart          String?
+  shiftEnd            String?
+
+  detourMiles   Int?
+  rideDirection RideDirection?
+
+  payoutMethod        PayoutMethod?
+  payoutAccountNumber String?
+  payoutAccountName   String?
+  payoutBankName      String?
+  payoutSwiftCode     String?
+
+  vehicle   Vehicle?
+  documents DriverDocuments?
+
+  locationText String?
+  avatarUrl    String?
+
+  workSiteName String?
+  workAddress  String?
+
+  faceRecognitionEnabled Boolean @default(true)
+  twoFactorEnabled       Boolean @default(false)
+
+  preferences          DriverPreferences?
+  documentsV2          DriverDocument[]
+  workLocationRequests WorkLocationChangeRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Vehicle {
+  id       String        @id @default(cuid())
+  driverId String        @unique
+  driver   DriverProfile @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  make         String?
+  model        String?
+  year         Int?
+  color        String?
+  licensePlate String?
+  seats        Int?
+
+  imageUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DriverDocuments {
+  id       String        @id @default(cuid())
+  driverId String        @unique
+  driver   DriverProfile @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  governmentIdUrl String?
+  selfieUrl       String?
+  licenseUrl      String?
+  insuranceUrl    String?
+  vehicleImageUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DriverDocument {
+  id       String        @id @default(cuid())
+  driverId String
+  driver   DriverProfile @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  type   String
+  url    String
+  status VerificationStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([driverId, type], name: "driverId_type")
+  @@index([driverId])
+}
+
+model DriverPreferences {
+  id       String        @id @default(cuid())
+  driverId String        @unique
+  driver   DriverProfile @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  language String @default("English")
+
+  rideUpdates    Boolean @default(true)
+  paymentAlerts  Boolean @default(true)
+  shiftReminders Boolean @default(true)
+  serviceAlerts  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WorkLocationChangeRequest {
+  id       String        @id @default(cuid())
+  driverId String
+  driver   DriverProfile @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  requestedSiteName String
+  requestedAddress  String
+  status            WorkChangeStatus @default(PENDING)
+
+  adminNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([driverId, createdAt])
+}
+
+/**
+ * ---------------- Trips / Chat / Reviews ----------------
+ */
+
+model Trip {
+  id String @id @default(cuid())
+
+  status   TripStatus @default(REQUESTED)
+  tripType TripType   @default(ONE_WAY)
+
+  bookingId    String?   @unique
+  scheduledFor DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  cancelledAt  DateTime?
+
+  riderId  String
+  driverId String?
+
+  pickupAddress  String
+  dropoffAddress String
+
+  pickupLat  Float?
+  pickupLng  Float?
+  dropoffLat Float?
+  dropoffLng Float?
+
+  fareCents          Int  @default(0)
+  distanceMeters     Int?
+  etaSeconds         Int?
+  estDurationSeconds Int?
+
+  paymentStatus PaymentStatus @default(UNPAID)
+
+  rider  User  @relation("RiderTrips", fields: [riderId], references: [id], onDelete: Cascade)
+  driver User? @relation("DriverTrips", fields: [driverId], references: [id], onDelete: SetNull)
+
+  messages      TripMessage[]
+  cancellations TripCancellation[]
+  reviews       TripReview[]
+  emergencies   EmergencyAlert[]
+
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  driverEarningTransactions DriverEarningTransaction[]
+
+  @@index([status])
+  @@index([driverId, status])
+  @@index([riderId, status])
+}
+
+model TripMessage {
+  id       String @id @default(cuid())
+  tripId   String
+  senderId String
+  text     String
+
+  deliveredAt DateTime?
+  seenAt      DateTime?
+
+  trip   Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  sender User @relation("TripMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([tripId, createdAt])
+}
+
+model TripCancellation {
+  id          String   @id @default(cuid())
+  tripId      String
+  cancelledBy String
+  reasons     String[]
+  otherReason String?
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  by   User @relation("TripCancellationBy", fields: [cancelledBy], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([tripId])
+}
+
+model TripReview {
+  id     String @id @default(cuid())
+  tripId String
+
+  reviewerId String
+  revieweeId String
+  rating     Int
+  text       String?
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  reviewer User @relation("TripReviewReviewer", fields: [reviewerId], references: [id], onDelete: Cascade)
+  reviewee User @relation("TripReviewReviewee", fields: [revieweeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([tripId])
+  @@index([revieweeId])
+}
+
+/**
+ * ---------------- Notifications ----------------
+ */
+
+model DriverNotification {
+  id String @id @default(cuid())
+
+  // receiver (driver user)
+  userId String
+  user   User   @relation("DriverNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  // sender (rider/admin user) - optional for SYSTEM notifications
+  source       NotificationSource @default(SYSTEM)
+  sourceUserId String?
+  sourceUser   User?              @relation("DriverNotificationSource", fields: [sourceUserId], references: [id], onDelete: SetNull)
+
+  title String
+  body  String
+
+  actionUrl String?
+  data      Json?
+
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt, createdAt])
+  @@index([sourceUserId])
+}
+
+model EmergencyAlert {
+  id       String  @id @default(cuid())
+  tripId   String
+  driverId String
+  type     String
+  message  String?
+
+  trip   Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  driver User @relation("DriverEmergencyAlerts", fields: [driverId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([tripId])
+}
+
+/**
+ * ---------------- Support chat ----------------
+ */
+
+model SupportConversation {
+  id String @id @default(cuid())
+
+  driverId String
+  driver   User   @relation("DriverSupportConversations", fields: [driverId], references: [id], onDelete: Cascade)
+
+  channel SupportChannel @default(CHAT)
+
+  name    String
+  tagLine String?
+  unread  Boolean @default(false)
+
+  lastMessageAt DateTime?
+
+  messages SupportMessage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([driverId, lastMessageAt])
+}
+
+model SupportMessage {
+  id String @id @default(cuid())
+
+  conversationId String
+  conversation   SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  author SupportAuthor
+  text   String
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+/**
+ * ---------------- Earnings / Wallet ----------------
+ */
+
+model DriverWallet {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  currency String @default("USD")
+
+  availableCents Int @default(0)
+
+  lifetimeEarnedCents    Int @default(0)
+  lifetimeWithdrawnCents Int @default(0)
+
+  transactions DriverEarningTransaction[]
+  withdrawals  DriverWithdrawalRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DriverPayoutMethod {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type     PayoutMethod
+  label    String
+  subLabel String?
+  details  Json?
+
+  isDefault Boolean @default(false)
+
+  withdrawals DriverWithdrawalRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, isDefault])
+}
+
+model DriverWithdrawalRequest {
+  id String @id @default(cuid())
+
+  walletId String
+  wallet   DriverWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  payoutMethodId String
+  payoutMethod   DriverPayoutMethod @relation(fields: [payoutMethodId], references: [id], onDelete: Restrict)
+
+  amountCents Int
+  status      WithdrawalStatus @default(PENDING)
+
+  adminNote   String?
+  externalRef String?
+
+  transactions DriverEarningTransaction[] @relation("WithdrawalTx")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([walletId, createdAt])
+  @@index([status, createdAt])
+}
+
+model DriverEarningTransaction {
+  id String @id @default(cuid())
+
+  walletId String
+  wallet   DriverWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type      EarningTransactionType
+  direction EarningDirection
+
+  title       String
+  description String?
+
+  amountCents Int
+
+  tripId String?
+  trip   Trip?   @relation(fields: [tripId], references: [id], onDelete: SetNull)
+
+  withdrawalId String?
+  withdrawal   DriverWithdrawalRequest? @relation("WithdrawalTx", fields: [withdrawalId], references: [id], onDelete: SetNull)
+
+  meta Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([walletId, createdAt])
+  @@index([tripId])
+  @@index([withdrawalId])
+}
