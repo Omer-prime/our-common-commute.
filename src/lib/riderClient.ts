@@ -258,12 +258,16 @@ export async function sos(tripId: string) {
  * ShareBookingModal:
  * returns { ok, url }
  */
+// export async function getTripShareLink(tripId: string) {
+//   return authedJson<{ ok: true; url: string }>(`/trips/${tripId}/share-link`, {
+//     method: "GET",
+//   });
+// }
 export async function getTripShareLink(tripId: string) {
-  return authedJson<{ ok: true; url: string }>(`/trips/${tripId}/share-link`, {
+  return authedJson<{ ok: true; url: string }>(`/rider/trips/${tripId}/share-link`, {
     method: "GET",
   });
 }
-
 /**
  * DriverQrModal:
  * re-issues QR token so rider can show again

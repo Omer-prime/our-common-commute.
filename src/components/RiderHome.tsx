@@ -26,7 +26,6 @@ import {
 } from "@/src/lib/riderClient";
 import { DriverLiveMap } from "@/src/components/DriverLiveMap";
 
-// ✅ use the same TripType as your rider-home components
 import { BookingFields } from "@/src/components/rider-home/BookingFields";
 import type { TripType } from "@/src/components/rider-home/types";
 
@@ -96,6 +95,7 @@ export function RiderHome() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
   const [userName, setUserName] = useState<string>("");
+  const [meId, setMeId] = useState<string>(""); // needed for DriverChatModal
 
   const [activeTrip, setActiveTrip] = useState<RiderTripDTO | null>(null);
   const [history, setHistory] = useState<RiderTripDTO[]>([]);
@@ -107,18 +107,31 @@ export function RiderHome() {
     return n.split(" ")[0] || n;
   }, [userName]);
 
-  // ✅ Real-time booking states
+  // booking input states
   const [pickup, setPickup] = useState<PlaceState | null>(null);
   const [dropoff, setDropoff] = useState<PlaceState | null>(null);
 
-  // leave/arrive times (real time)
   const [leaveAt, setLeaveAt] = useState<Date | null>(null);
-  const [arriveAt, setArriveAt] = useState<Date | null>(null); // optional for round-trip UI
+  const [arriveAt, setArriveAt] = useState<Date | null>(null);
 
-  // Estimate + booking state
+  // estimate state
   const [estimateLoading, setEstimateLoading] = useState(false);
   const [estimateErr, setEstimateErr] = useState<string | null>(null);
   const [estimate, setEstimate] = useState<EstimateState | null>(null);
+
+  // booked trip state (real backend result)
+  const [bookedTrip, setBookedTrip] = useState<RiderTripDTO | null>(null);
+  const [bookedShareUrl, setBookedShareUrl] = useState<string>("");
+  const [bookedQrToken, setBookedQrToken] = useState<string>("");
+
+  const [bookLoading, setBookLoading] = useState(false);
+
+  // best trip to use for modals
+  const currentTrip = useMemo(() => activeTrip ?? bookedTrip, [activeTrip, bookedTrip]);
+  const currentTripId = useMemo(() => String((currentTrip as any)?.id ?? ""), [currentTrip]);
+
+  // share modal return target
+  const [shareReturnTo, setShareReturnTo] = useState<"none" | "arrival" | "inTrip">("none");
 
   // load dashboard data
   useEffect(() => {
@@ -133,18 +146,24 @@ export function RiderHome() {
         if (!alive) return;
 
         setUserName(data.user?.fullName ?? "");
+
+        // try to set meId safely from whatever backend returns
+        const uid =
+          (data.user as any)?.id ??
+          (data.user as any)?.userId ??
+          (data.user as any)?.riderId ??
+          "";
+        setMeId(String(uid));
+
         setActiveTrip(data.activeTrip);
         setHistory(data.history ?? []);
         setUpcoming(data.upcoming ?? []);
 
-        // Seed pickup/dropoff from most recent trip (only if user hasn't selected)
-        const seed = (data.upcoming?.[0] ?? data.history?.[0]) as
-          | RiderTripDTO
-          | undefined;
+        const seed = (data.upcoming?.[0] ?? data.history?.[0]) as RiderTripDTO | undefined;
 
         if (seed) {
-          setPickup((prev) => prev ?? { label: seed.pickupAddress });
-          setDropoff((prev) => prev ?? { label: seed.destinationAddress });
+          setPickup((prev) => prev ?? { label: (seed as any).pickupAddress ?? "" });
+          setDropoff((prev) => prev ?? { label: (seed as any).destinationAddress ?? "" });
         }
       } catch (e: any) {
         if (!alive) return;
@@ -198,7 +217,7 @@ export function RiderHome() {
     try {
       setEstimateLoading(true);
 
-      // if coords missing, try geocode and update state so map draws route
+      // if coords missing, try geocode and update state
       let pCoords = pickup?.coords;
       let dCoords = dropoff?.coords;
 
@@ -219,11 +238,6 @@ export function RiderHome() {
 
       const apiTripType = tripType === "round-trip" ? "ROUND_TRIP" : "ONE_WAY";
 
-      const scheduledFor =
-        leaveAt && leaveAt.getTime() > Date.now() + 60_000
-          ? leaveAt.toISOString()
-          : undefined;
-
       const res = await estimateTrip({
         tripType: apiTripType,
         pickupAddress,
@@ -232,9 +246,7 @@ export function RiderHome() {
         pickupLng: pCoords?.lng,
         dropoffLat: dCoords?.lat,
         dropoffLng: dCoords?.lng,
-        scheduledFor,
-        recurring,
-      } as any);
+      });
 
       const payload = (res as any)?.estimate ?? res;
 
@@ -259,6 +271,8 @@ export function RiderHome() {
     const pickupAddress = pickup?.label?.trim() || "";
     const dropoffAddress = dropoff?.label?.trim() || "";
 
+    setEstimateErr(null);
+
     if (!pickupAddress || !dropoffAddress) {
       setEstimateErr("Please select pickup and destination first.");
       return;
@@ -269,12 +283,12 @@ export function RiderHome() {
     }
 
     try {
+      setBookLoading(true);
+
       const apiTripType = tripType === "round-trip" ? "ROUND_TRIP" : "ONE_WAY";
 
       const scheduledFor =
-        leaveAt && leaveAt.getTime() > Date.now() + 60_000
-          ? leaveAt.toISOString()
-          : undefined;
+        leaveAt && leaveAt.getTime() > Date.now() + 60_000 ? leaveAt.toISOString() : undefined;
 
       const res = await bookTrip({
         tripType: apiTripType,
@@ -287,17 +301,21 @@ export function RiderHome() {
         scheduledFor,
         fareCents: estimate.fareCents,
         distanceMeters: estimate.distanceMeters ?? undefined,
-        recurring,
-      } as any);
+      });
 
-      const trip = (res as any)?.trip ?? (res as any)?.data?.trip ?? null;
-      if (trip) setActiveTrip(trip);
+      setBookedTrip(res.trip);
+      setBookedQrToken(res.qrToken);
+      setBookedShareUrl(res.shareUrl);
+
+      setActiveTrip(res.trip);
 
       setIsFareModalOpen(false);
       setIsBookingConfirmOpen(true);
     } catch (e: any) {
       setEstimateErr(e?.error ? String(e.error) : "Booking failed");
       setIsFareModalOpen(true);
+    } finally {
+      setBookLoading(false);
     }
   };
 
@@ -305,6 +323,8 @@ export function RiderHome() {
   const handleScheduleRide = async () => {
     const pickupAddress = pickup?.label?.trim() || "";
     const dropoffAddress = dropoff?.label?.trim() || "";
+
+    setEstimateErr(null);
 
     if (!pickupAddress || !dropoffAddress) {
       setEstimateErr("Please select pickup and destination first.");
@@ -331,11 +351,9 @@ export function RiderHome() {
         dropoffLat: dropoff?.coords?.lat,
         dropoffLng: dropoff?.coords?.lng,
         scheduledFor: leaveAt.toISOString(),
-        recurring,
-      } as any);
+      });
 
-      const trip = (res as any)?.trip ?? (res as any)?.data?.trip ?? null;
-      if (trip) setUpcoming((prev) => [trip, ...prev]);
+      setUpcoming((prev) => [res.trip, ...prev]);
     } catch (e: any) {
       setEstimateErr(e?.error ? String(e.error) : "Failed to schedule ride");
     }
@@ -343,6 +361,7 @@ export function RiderHome() {
 
   const handleShareFromConfirmation = () => {
     setIsBookingConfirmOpen(false);
+    setShareReturnTo("arrival");
     setIsShareModalOpen(true);
   };
 
@@ -353,10 +372,14 @@ export function RiderHome() {
 
   const closeShareModal = () => {
     setIsShareModalOpen(false);
-    setIsDriverArrivalOpen(true);
+
+    if (shareReturnTo === "arrival") {
+      setIsDriverArrivalOpen(true);
+    }
+    setShareReturnTo("none");
   };
 
-  const handleSubmitCancelFeedback = () => {
+  const handleCloseCancelFeedback = () => {
     setIsCancelFeedbackOpen(false);
     setIsDriverArrivalOpen(false);
   };
@@ -380,27 +403,27 @@ export function RiderHome() {
 
         {/* Mobile */}
         <div className="lg:hidden">
-         <MobileTopSection
-  tripType={tripType}
-  setTripType={setTripType}
-  recurring={recurring}
-  toggleRecurring={() => setRecurring((v) => !v)}
-  openFareModal={openFareModal}
-  pickup={pickup}
-  dropoff={dropoff}
-  leaveAt={leaveAt}
-  arriveAt={arriveAt}
-  onPickupChange={async (p) => {
-    const coords = p.coords ?? (p.label ? await tryGeocode(p.label) : undefined);
-    setPickup({ label: p.label, coords });
-  }}
-  onDropoffChange={async (p) => {
-    const coords = p.coords ?? (p.label ? await tryGeocode(p.label) : undefined);
-    setDropoff({ label: p.label, coords });
-  }}
-  onLeaveAtChange={setLeaveAt}
-  onArriveAtChange={setArriveAt}
-/>
+          <MobileTopSection
+            tripType={tripType}
+            setTripType={setTripType}
+            recurring={recurring}
+            toggleRecurring={() => setRecurring((v) => !v)}
+            openFareModal={openFareModal}
+            pickup={pickup}
+            dropoff={dropoff}
+            leaveAt={leaveAt}
+            arriveAt={arriveAt}
+            onPickupChange={async (p) => {
+              const coords = p.coords ?? (p.label ? await tryGeocode(p.label) : undefined);
+              setPickup({ label: p.label, coords });
+            }}
+            onDropoffChange={async (p) => {
+              const coords = p.coords ?? (p.label ? await tryGeocode(p.label) : undefined);
+              setDropoff({ label: p.label, coords });
+            }}
+            onLeaveAtChange={setLeaveAt}
+            onArriveAtChange={setArriveAt}
+          />
         </div>
 
         {/* Desktop */}
@@ -443,9 +466,7 @@ export function RiderHome() {
                   <h2 className="text-sm font-semibold text-slate-50">
                     Hello {firstName}, where would you like to go
                   </h2>
-                  <p className="mt-1 text-[11px] text-slate-400">
-                    Choose your preferred destination
-                  </p>
+                  <p className="mt-1 text-[11px] text-slate-400">Choose your preferred destination</p>
                 </div>
 
                 {/* Trip type toggle */}
@@ -470,7 +491,6 @@ export function RiderHome() {
                   </button>
                 </div>
 
-                {/* ✅ real-time booking fields (popover UI) */}
                 <BookingFields
                   tripType={tripType}
                   recurring={recurring}
@@ -494,7 +514,13 @@ export function RiderHome() {
                 {/* Status row */}
                 <div className="flex items-center gap-3 rounded-xl border border-[#233358] bg-[#1a2d51] px-3 py-2.5">
                   <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#111e3c]">
-                    <Image src="/arrow-head.png" alt="Status" width={18} height={18} className="h-4 w-4 object-contain" />
+                    <Image
+                      src="/arrow-head.png"
+                      alt="Status"
+                      width={18}
+                      height={18}
+                      className="h-4 w-4 object-contain"
+                    />
                   </div>
                   <div className="flex-1 text-xs">
                     <div className="text-[11px] text-slate-300">Status</div>
@@ -543,7 +569,10 @@ export function RiderHome() {
           <div className="rounded-2xl border border-[#233358] bg-[#101a33] p-4">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-slate-50">History</h3>
-              <Link href="/rider/dashboard/my-rides" className="text-xs font-medium text-blue-400 hover:underline">
+              <Link
+                href="/rider/dashboard/my-rides"
+                className="text-xs font-medium text-blue-400 hover:underline"
+              >
                 See All
               </Link>
             </div>
@@ -556,9 +585,9 @@ export function RiderHome() {
               <div className="divide-y divide-[#233358] text-xs">
                 {history.map((t) => (
                   <RideRow
-                    key={t.id}
-                    title={shortTitle(t.destinationAddress)}
-                    address={t.pickupAddress}
+                    key={t.id as any}
+                    title={shortTitle((t as any).destinationAddress ?? "")}
+                    address={(t as any).pickupAddress ?? ""}
                     right={fmtMoney((t as any).fare ?? 0)}
                   />
                 ))}
@@ -569,7 +598,10 @@ export function RiderHome() {
           <div className="rounded-2xl border border-[#233358] bg-[#101a33] p-4">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-slate-50">Upcoming ride</h3>
-              <Link href="/rider/dashboard/my-rides" className="text-xs font-medium text-blue-400 hover:underline">
+              <Link
+                href="/rider/dashboard/my-rides"
+                className="text-xs font-medium text-blue-400 hover:underline"
+              >
                 See All
               </Link>
             </div>
@@ -582,10 +614,10 @@ export function RiderHome() {
               <div className="divide-y divide-[#233358] text-xs">
                 {upcoming.map((t) => (
                   <RideRow
-                    key={t.id}
-                    title={shortTitle(t.destinationAddress)}
-                    address={t.pickupAddress}
-                    right={t.scheduledFor ? fmtDate(t.scheduledFor) : "—"}
+                    key={t.id as any}
+                    title={shortTitle((t as any).destinationAddress ?? "")}
+                    address={(t as any).pickupAddress ?? ""}
+                    right={(t as any).scheduledFor ? fmtDate((t as any).scheduledFor) : "—"}
                   />
                 ))}
               </div>
@@ -600,28 +632,40 @@ export function RiderHome() {
           onClose={closeFareModal}
           onBook={handleBookNow}
           estimate={estimate}
+          loading={estimateLoading || bookLoading}
+          error={estimateErr}
           pickupAddress={pickup?.label || ""}
           dropoffAddress={dropoff?.label || ""}
           tripTypeLabel={tripType === "round-trip" ? "Round trip" : "One-way"}
-          dateTimeLabel={leaveAt ? leaveAt.toLocaleDateString() : "Now"}
+          dateTimeLabel={leaveAt ? leaveAt.toLocaleString() : "Now"}
         />
       )}
 
       {isBookingConfirmOpen && (
         <BookingConfirmationModal
+          trip={bookedTrip}
           onClose={() => setIsBookingConfirmOpen(false)}
           onShare={handleShareFromConfirmation}
           onGoToRides={handleGoToMyRides}
         />
       )}
 
-      {isShareModalOpen && <ShareBookingModal onClose={closeShareModal} />}
+      {isShareModalOpen && currentTrip && (
+        <ShareBookingModal tripId={currentTripId} onClose={closeShareModal} />
+      )}
 
-      {isDriverArrivalOpen && (
+      {isDriverArrivalOpen && currentTrip && (
         <DriverArrivalModal
+          trip={currentTrip}
           onClose={() => setIsDriverArrivalOpen(false)}
-          onOpenQr={() => setIsDriverQrOpen(true)}
-          onCancelRide={() => setIsCancelFeedbackOpen(true)}
+          onOpenQr={() => {
+            setIsDriverArrivalOpen(false);
+            setIsDriverQrOpen(true);
+          }}
+          onCancelRide={() => {
+            setIsDriverArrivalOpen(false);
+            setIsCancelFeedbackOpen(true);
+          }}
           onStartTrip={() => {
             setIsDriverArrivalOpen(false);
             setIsInTripOpen(true);
@@ -633,12 +677,15 @@ export function RiderHome() {
         />
       )}
 
-      {isDriverQrOpen && <DriverQrModal onClose={() => setIsDriverQrOpen(false)} />}
+      {isDriverQrOpen && currentTrip && (
+        <DriverQrModal tripId={currentTripId} onClose={() => setIsDriverQrOpen(false)} />
+      )}
 
-      {isCancelFeedbackOpen && (
+      {/* ✅ FINAL FIX: CancelRideFeedbackModal requires tripId */}
+      {isCancelFeedbackOpen && currentTrip && (
         <CancelRideFeedbackModal
-          onClose={() => setIsCancelFeedbackOpen(false)}
-          onSubmit={handleSubmitCancelFeedback}
+          tripId={currentTripId}
+          onClose={handleCloseCancelFeedback}
         />
       )}
 
@@ -646,7 +693,10 @@ export function RiderHome() {
         <InTripTrackingModal
           onClose={() => setIsInTripOpen(false)}
           onOpenEmergency={() => setIsEmergencyOpen(true)}
-          onShareTrip={() => setIsShareModalOpen(true)}
+          onShareTrip={() => {
+            setShareReturnTo("inTrip");
+            setIsShareModalOpen(true);
+          }}
           onEndTrip={() => {
             setIsInTripOpen(false);
             setIsEndTripOpen(true);
@@ -654,12 +704,17 @@ export function RiderHome() {
         />
       )}
 
-      {isEmergencyOpen && (
-        <EmergencyAlertModal onClose={() => setIsEmergencyOpen(false)} onCallEmergency={() => {}} />
+      {isEmergencyOpen && currentTrip && (
+        <EmergencyAlertModal
+          tripId={currentTripId}
+          onClose={() => setIsEmergencyOpen(false)}
+          onCallEmergency={() => {}}
+        />
       )}
 
-      {isEndTripOpen && (
+      {isEndTripOpen && currentTrip && (
         <EndTripConfirmationModal
+          trip={currentTrip}
           onClose={() => setIsEndTripOpen(false)}
           onReportIssue={() => setIsEndTripOpen(false)}
           onRateDriver={() => {
@@ -679,7 +734,13 @@ export function RiderHome() {
         />
       )}
 
-      {isChatOpen && <DriverChatModal onClose={() => setIsChatOpen(false)} />}
+      {isChatOpen && currentTrip && (
+        <DriverChatModal
+          tripId={currentTripId}
+          meId={meId}
+          onClose={() => setIsChatOpen(false)}
+        />
+      )}
     </RiderDashboardShell>
   );
 }
@@ -690,7 +751,13 @@ function RideRow({ title, address, right }: { title: string; address: string; ri
     <div className="flex items-center justify-between gap-3 py-2.5">
       <div className="flex items-center gap-3">
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#111e3c]">
-          <Image src="/fashion.png" alt="" width={16} height={16} className="h-4 w-4 object-contain" />
+          <Image
+            src="/fashion.png"
+            alt=""
+            width={16}
+            height={16}
+            className="h-4 w-4 object-contain"
+          />
         </div>
         <div>
           <div className="text-xs font-medium text-slate-50">{title}</div>

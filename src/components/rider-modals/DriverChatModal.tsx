@@ -1,77 +1,83 @@
-import React, { useState } from "react";
+"use client";
+
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { Send, X } from "lucide-react";
+import { getTripChat, sendTripChat, type TripMessageDTO } from "../../lib/riderClient";
 
 type DriverChatModalProps = {
+  tripId: string;
+  meId: string;
   onClose: () => void;
+
+  driverName?: string;
+  driverAvatarSrc?: string; // optional
 };
 
-type ChatMessage = {
-  id: number;
-  from: "me" | "driver";
-  text: string;
-  time: string;
-};
+function formatTime(iso: string) {
+  const d = new Date(iso);
+  return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
 
-const initialMessages: ChatMessage[] = [
-  {
-    id: 1,
-    from: "driver",
-    text: "Hello?",
-    time: "11:55 A.M.",
-  },
-  {
-    id: 2,
-    from: "me",
-    text: "How may I be of help ?",
-    time: "11:56 A.M.",
-  },
-  {
-    id: 3,
-    from: "driver",
-    text: "I’m currently waiting for you at the beach beside Rain Cover Avenue",
-    time: "11:57 A.M.",
-  },
-  {
-    id: 4,
-    from: "me",
-    text: "Thanks for reaching out, well it takes...",
-    time: "11:58 A.M.",
-  },
-  {
-    id: 5,
-    from: "me",
-    text: "Also, can you send us a picture so I can confirm the location",
-    time: "11:59 A.M.",
-  },
-  {
-    id: 6,
-    from: "driver",
-    text: "Of course! I will send now",
-    time: "11:59 A.M.",
-  },
-];
-
-export function DriverChatModal({ onClose }: DriverChatModalProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
-  const [input, setInput] = useState("");
-
+export function DriverChatModal({
+  tripId,
+  meId,
+  onClose,
+  driverName = "Driver",
+  driverAvatarSrc = "/maxwell.png",
+}: DriverChatModalProps) {
   const stop = (e: React.MouseEvent<HTMLDivElement>) => e.stopPropagation();
 
-  const handleSend = () => {
-    const trimmed = input.trim();
-    if (!trimmed) return;
+  const [messages, setMessages] = useState<TripMessageDTO[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: prev.length + 1,
-        from: "me",
-        text: trimmed,
-        time: "Now",
-      },
-    ]);
-    setInput("");
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const res = await getTripChat(tripId);
+        if (!alive) return;
+        setMessages(res.messages);
+      } catch (e: any) {
+        if (!alive) return;
+        setErr(e?.error ? String(e.error) : "Failed to load chat");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [tripId]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length]);
+
+  const handleSend = async () => {
+    const text = input.trim();
+    if (!text || sending) return;
+
+    setSending(true);
+    try {
+      const res = await sendTripChat(tripId, text);
+      setMessages((prev) => [...prev, res.message]);
+      setInput("");
+    } catch (e: any) {
+      setErr(e?.error ? String(e.error) : "Failed to send message");
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -81,18 +87,25 @@ export function DriverChatModal({ onClose }: DriverChatModalProps) {
     }
   };
 
+  const rendered = useMemo(() => {
+    return messages.map((m) => {
+      const isMe = m.senderId === meId;
+      return {
+        ...m,
+        isMe,
+        time: formatTime(m.createdAt),
+      };
+    });
+  }, [messages, meId]);
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6" onClick={onClose}>
       <div
         className="relative flex h-full w-full max-w-sm flex-col overflow-hidden rounded-3xl border border-[#233358] bg-[#050817] shadow-[0_30px_80px_rgba(0,0,0,0.95)] sm:h-[640px]"
         onClick={stop}
       >
         {/* HEADER */}
         <div className="flex items-center border-b border-[#233358] bg-[#101a33] px-4 py-3">
-          {/* Back / close on the left for mobile-feel */}
           <button
             type="button"
             onClick={onClose}
@@ -103,59 +116,52 @@ export function DriverChatModal({ onClose }: DriverChatModalProps) {
 
           <div className="flex items-center gap-3">
             <div className="relative h-8 w-8 overflow-hidden rounded-full bg-slate-500">
-              <Image
-                src="/maxwell.png"
-                alt="Driver avatar"
-                fill
-                className="object-cover"
-              />
+              <Image src={driverAvatarSrc} alt="Driver avatar" fill className="object-cover" />
             </div>
             <div className="flex flex-col">
-              <span className="text-sm font-semibold text-slate-50">M.L</span>
+              <span className="text-sm font-semibold text-slate-50">{driverName}</span>
               <span className="text-[11px] text-emerald-400">● Online</span>
             </div>
           </div>
         </div>
 
-        {/* CHAT BODY */}
+        {/* BODY */}
         <div className="flex-1 space-y-3 overflow-y-auto bg-[#050817] px-4 py-3">
-          {/* Date separator */}
-          <div className="my-2 text-center text-[11px] text-slate-500">
-            Today...
-          </div>
+          <div className="my-2 text-center text-[11px] text-slate-500">Today...</div>
 
-          {messages.map((m) => {
-            const isMe = m.from === "me";
-            const align = isMe ? "justify-end" : "justify-start";
-            const bubbleColor = isMe
-              ? "bg-[#0B63F4] text-white"
-              : "bg-[#18213a] text-slate-100";
-            const radius = isMe
-              ? "rounded-2xl rounded-br-sm"
-              : "rounded-2xl rounded-bl-sm";
+          {loading ? (
+            <div className="text-center text-[12px] text-slate-400">Loading chat...</div>
+          ) : null}
+
+          {err ? (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+              {err}
+            </div>
+          ) : null}
+
+          {rendered.map((m) => {
+            const align = m.isMe ? "justify-end" : "justify-start";
+            const bubbleColor = m.isMe ? "bg-[#0B63F4] text-white" : "bg-[#18213a] text-slate-100";
+            const radius = m.isMe ? "rounded-2xl rounded-br-sm" : "rounded-2xl rounded-bl-sm";
 
             return (
               <div key={m.id} className={`flex w-full ${align}`}>
                 <div className="max-w-[80%]">
-                  <div
-                    className={`${bubbleColor} ${radius} inline-block px-3 py-2 text-[13px] leading-relaxed`}
-                  >
+                  <div className={`${bubbleColor} ${radius} inline-block px-3 py-2 text-[13px] leading-relaxed`}>
                     {m.text}
                   </div>
-                  <div
-                    className={`mt-1 text-[10px] text-slate-500 ${
-                      isMe ? "text-right" : "text-left"
-                    }`}
-                  >
+                  <div className={`mt-1 text-[10px] text-slate-500 ${m.isMe ? "text-right" : "text-left"}`}>
                     {m.time}
                   </div>
                 </div>
               </div>
             );
           })}
+
+          <div ref={bottomRef} />
         </div>
 
-        {/* INPUT BAR */}
+        {/* INPUT */}
         <div className="border-t border-[#233358] bg-[#050817] px-3 py-3">
           <div className="flex items-center gap-2 rounded-2xl bg-[#101a33] px-3 py-2">
             <input
@@ -169,7 +175,8 @@ export function DriverChatModal({ onClose }: DriverChatModalProps) {
             <button
               type="button"
               onClick={handleSend}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-[#0B63F4] text-white hover:bg-[#1a74ff]"
+              disabled={sending || !input.trim()}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-[#0B63F4] text-white hover:bg-[#1a74ff] disabled:opacity-60"
             >
               <Send className="h-4 w-4" />
             </button>

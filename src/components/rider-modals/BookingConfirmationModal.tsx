@@ -1,16 +1,24 @@
+"use client";
+
 // src/components/rider-modals/BookingConfirmationModal.tsx
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { CheckCircle2, X } from "lucide-react";
 import { Button } from "../ui";
 import type { RiderTripDTO } from "../../lib/riderClient";
+import { getTripShareLink } from "../../lib/riderClient";
 
 type BookingConfirmationModalProps = {
   onClose: () => void;
-  onShare: () => void;
+
+  /** optional override; if you already open a separate Share modal */
+  onShare?: (() => void) | ((url: string) => void);
+
   onGoToRides: () => void;
 
-  // ✅ real backend trip (required, but we still guard)
-  trip: RiderTripDTO | null;
+  trip?: RiderTripDTO | null;
+
+  /** if you stored it from /book response, pass it for instant share */
+  shareUrl?: string | null;
 };
 
 function formatDateTime(iso: string | null) {
@@ -26,26 +34,76 @@ function formatDateTime(iso: string | null) {
 }
 
 function tripTypeLabel(t: RiderTripDTO["tripType"] | null | undefined) {
-  if (t === "ROUND_TRIP") return "Round trip";
-  return "One-way";
+  return t === "ROUND_TRIP" ? "Round trip" : "One-way";
 }
 
-function shortBookingId(trip: RiderTripDTO | null) {
+function bookingIdLabel(trip: RiderTripDTO | null | undefined) {
   if (!trip) return "—";
-  return trip.bookingId ? `#${trip.bookingId}` : `#${trip.id.slice(0, 8)}`;
+  if (trip.bookingId) return trip.bookingId; // ✅ backend already includes '#'
+  return `#${trip.id.slice(0, 8)}`;
+}
+
+async function shareOrCopy(url: string) {
+  // share sheet first
+  if (typeof navigator !== "undefined" && (navigator as any).share) {
+    try {
+      await (navigator as any).share({ title: "Booking", url });
+      return;
+    } catch {
+      // fall back to clipboard
+    }
+  }
+
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(url);
+    return;
+  }
+
+  // ultimate fallback
+  if (typeof window !== "undefined") {
+    window.prompt("Copy this link:", url);
+  }
 }
 
 export function BookingConfirmationModal({
   onClose,
   onShare,
   onGoToRides,
-  trip,
+  trip = null,
+  shareUrl = null,
 }: BookingConfirmationModalProps) {
   const stop = (e: React.MouseEvent<HTMLDivElement>) => e.stopPropagation();
 
+  const [sharing, setSharing] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+
   const dateTime = useMemo(() => formatDateTime(trip?.scheduledFor ?? null), [trip?.scheduledFor]);
   const tType = useMemo(() => tripTypeLabel(trip?.tripType), [trip?.tripType]);
-  const booking = useMemo(() => shortBookingId(trip), [trip]);
+  const booking = useMemo(() => bookingIdLabel(trip), [trip]);
+
+  const handleShare = async () => {
+    if (!trip) return;
+
+    setShareError(null);
+    setSharing(true);
+    try {
+      const url =
+        shareUrl ??
+        (await getTripShareLink(trip.id)).url;
+
+      // If parent provided handler, call it (supports both () => void and (url)=>void)
+      if (onShare) {
+        (onShare as any)(url);
+        return;
+      }
+
+      await shareOrCopy(url);
+    } catch (e: any) {
+      setShareError(e?.error ? String(e.error) : "Failed to create share link");
+    } finally {
+      setSharing(false);
+    }
+  };
 
   return (
     <div
@@ -75,21 +133,22 @@ export function BookingConfirmationModal({
           <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-[#18213a]">
             <CheckCircle2 className="h-6 w-6 text-[#0B63F4]" />
           </div>
-          <div className="mt-3 text-sm font-semibold text-slate-50">
-            Your ride is booked!
-          </div>
+          <div className="mt-3 text-sm font-semibold text-slate-50">Your ride is booked!</div>
           <div className="mt-1 text-[11px] leading-relaxed text-slate-400">
             We&apos;ll notify you once a driver accepts.
           </div>
+
+          {shareError ? (
+            <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+              {shareError}
+            </div>
+          ) : null}
         </div>
 
         {/* Trip details + steps */}
         <div className="mx-6 mb-4 overflow-hidden rounded-xl border border-[#233358] bg-[#18213a] text-xs text-slate-200">
-          {/* Trip details */}
           <div className="border-b border-[#233358] px-4 py-3">
-            <div className="mb-2 text-[11px] font-medium text-slate-300">
-              Trip details
-            </div>
+            <div className="mb-2 text-[11px] font-medium text-slate-300">Trip details</div>
 
             <div className="grid gap-4 sm:grid-cols-3">
               <div>
@@ -109,7 +168,7 @@ export function BookingConfirmationModal({
             </div>
           </div>
 
-          {/* Steps (static for now) */}
+          {/* Steps */}
           <div className="px-4 py-3">
             <div className="space-y-3">
               <div className="flex gap-3">
@@ -162,10 +221,10 @@ export function BookingConfirmationModal({
             <Button
               type="button"
               className="h-11 w-full rounded-lg bg-[#0B63F4] text-sm font-semibold shadow-[0_18px_40px_rgba(0,0,0,0.6)] hover:bg-[#1a74ff]"
-              onClick={onShare}
-              disabled={!trip}
+              onClick={handleShare}
+              disabled={!trip || sharing}
             >
-              Share booking
+              {sharing ? "Sharing..." : "Share booking"}
             </Button>
           </div>
         </div>

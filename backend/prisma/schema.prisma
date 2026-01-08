@@ -23,11 +23,18 @@ enum NotificationSource {
   SYSTEM
 }
 
+enum NotificationCategory {
+  RIDE
+  PAYMENT
+  SYSTEM
+}
+
 enum RideDirection {
   TO_WORK_ONLY
   FROM_WORK_ONLY
   BOTH
 }
+
 enum RiderPaymentMethod {
   APPLE_PAY
   PAYPAL
@@ -35,6 +42,7 @@ enum RiderPaymentMethod {
   CASHAPP
   CREDIT_CARD
 }
+
 enum PayoutMethod {
   BANK_ACCOUNT
   MOBILE_WALLET
@@ -120,6 +128,61 @@ enum WithdrawalStatus {
   CANCELLED
 }
 
+enum FareRuleStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AdminNotificationTarget {
+  DRIVERS
+  RIDERS
+  ALL_USERS
+}
+
+enum AdminNotificationChannel {
+  PUSH
+  EMAIL
+  SMS
+}
+
+enum AdminNotificationStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum CmsPublishStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum CmsDocType {
+  TERMS
+  POLICY
+}
+
+enum CmsGuidelineAudience {
+  DRIVER
+  RIDER
+}
+
+enum AdminAccountStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum RiderIdentityDocType {
+  GOVERNMENT_ID
+  SELFIE
+}
+
+enum RiderLocationTarget {
+  HOME
+  WORK
+}
+
 /**
  * ------------------------------ Core ------------------------------
  */
@@ -153,12 +216,13 @@ model User {
 
   emergencyAlerts EmergencyAlert[] @relation("DriverEmergencyAlerts")
 
-  supportConversations SupportConversation[] @relation("DriverSupportConversations")
-
+  supportConversations    SupportConversation[] @relation("DriverSupportConversations")
+  notifications           UserNotification[]    @relation("UserNotifications")
+  sentNotifications       UserNotification[]    @relation("UserNotificationSource")
   // who sent the notification (rider/admin/system user)
-  sentDriverNotifications DriverNotification[] @relation("DriverNotificationSource")
+  sentDriverNotifications DriverNotification[]  @relation("DriverNotificationSource")
 
-   riderProfile RiderProfile?
+  riderProfile        RiderProfile?
   riderOnboardingOtps RiderOnboardingOtp[]
 
   // Earnings / Wallet
@@ -166,6 +230,294 @@ model User {
   payoutMethods       DriverPayoutMethod[]
   earningTransactions DriverEarningTransaction[]
   withdrawalRequests  DriverWithdrawalRequest[]
+
+  fareRulesCreated          FareRule[]                  @relation("FareRulesCreatedBy")
+  adminNotificationsCreated AdminNotificationCampaign[] @relation("AdminNotificationCreatedBy")
+
+  cmsFaqsCreated CmsFaq[] @relation("CmsFaqCreatedBy")
+  cmsFaqsUpdated CmsFaq[] @relation("CmsFaqUpdatedBy")
+
+  cmsArticlesCreated CmsArticle[] @relation("CmsArticleCreatedBy")
+  cmsArticlesUpdated CmsArticle[] @relation("CmsArticleUpdatedBy")
+
+  cmsDocsUpdated       CmsDocVersion[] @relation("CmsDocUpdatedBy")
+  cmsGuidelinesUpdated CmsGuideline[]  @relation("CmsGuidelineUpdatedBy")
+
+  adminAccount          AdminAccount?
+  riderPreferences      RiderPreferences?
+  riderPaymentOptions   RiderPaymentOption[]
+  riderIdentityDocs     RiderIdentityDoc[]
+  riderLocationRequests RiderLocationChangeRequest[]
+}
+
+model RiderPreferences {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  language String @default("English")
+
+  rideUpdates    Boolean @default(true)
+  paymentAlerts  Boolean @default(true)
+  shiftReminders Boolean @default(true)
+  serviceAlerts  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RiderPaymentOption {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type      RiderPaymentMethod
+  label     String
+  secondary String?
+  isDefault Boolean            @default(false)
+
+  details Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, isDefault])
+}
+
+model RiderIdentityDoc {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type   RiderIdentityDocType
+  url    String
+  status VerificationStatus   @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, type])
+  @@index([userId, createdAt])
+}
+
+model RiderLocationChangeRequest {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  target           RiderLocationTarget
+  requestedAddress String
+
+  status    WorkChangeStatus @default(PENDING)
+  adminNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+model RiderProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  phone String?
+
+  onboardingStep        Int       @default(1)
+  onboardingCompletedAt DateTime?
+  otpVerifiedAt         DateTime?
+
+  // existing
+  locationText  String?
+  paymentMethod RiderPaymentMethod?
+
+  // ✅ for your Profile UI
+  homeAddress String?
+  workAddress String?
+  avatarUrl   String?
+
+  // ✅ Security toggles (Profile -> Security)
+  faceRecognitionEnabled Boolean @default(true)
+  twoFactorEnabled       Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AdminAccount {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // e.g. "Super admin" | "Compliance" | "Support"
+  adminRoleName String @default("Super admin")
+
+  status AdminAccountStatus @default(ACTIVE)
+
+  lastLoginAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([adminRoleName])
+}
+
+model AdminSettings {
+  id  String @id @default(cuid())
+  key String @unique // use "GLOBAL"
+
+  compliance    Json?
+  notifications Json?
+  customization Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AdminNotificationCampaign {
+  id String @id @default(cuid())
+
+  createdById String
+  createdBy   User   @relation("AdminNotificationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  title String
+  body  String
+
+  target  AdminNotificationTarget
+  channel AdminNotificationChannel
+
+  // If scheduleEnabled=true then scheduledFor must be set
+  scheduleEnabled Boolean   @default(false)
+  scheduledFor    DateTime?
+
+  status AdminNotificationStatus @default(PENDING)
+
+  // delivery stats
+  totalRecipients Int @default(0)
+  sentCount       Int @default(0)
+  failedCount     Int @default(0)
+
+  sentAt       DateTime?
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, scheduledFor])
+  @@index([createdById, createdAt])
+}
+
+model CmsFaq {
+  id String @id @default(cuid())
+
+  question String
+  answer   String
+  category String
+
+  status CmsPublishStatus @default(DRAFT)
+
+  createdById String
+  createdBy   User   @relation("CmsFaqCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  updatedById String?
+  updatedBy   User?   @relation("CmsFaqUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, category, updatedAt])
+}
+
+model CmsArticle {
+  id String @id @default(cuid())
+
+  title    String
+  content  String
+  category String
+
+  status CmsPublishStatus @default(DRAFT)
+
+  createdById String
+  createdBy   User   @relation("CmsArticleCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  updatedById String?
+  updatedBy   User?   @relation("CmsArticleUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, category, updatedAt])
+}
+
+model CmsDocVersion {
+  id String @id @default(cuid())
+
+  type    CmsDocType
+  version String
+
+  notes   String?
+  content String
+
+  status      CmsPublishStatus @default(DRAFT)
+  publishedAt DateTime?
+
+  updatedById String
+  updatedBy   User   @relation("CmsDocUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([type, version])
+  @@index([type, status, updatedAt])
+}
+
+model CmsGuideline {
+  id String @id @default(cuid())
+
+  audience     CmsGuidelineAudience
+  sectionTitle String
+  content      String
+  notes        String?
+
+  status CmsPublishStatus @default(DRAFT)
+
+  updatedById String
+  updatedBy   User   @relation("CmsGuidelineUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([audience, status, updatedAt])
+}
+
+model FareRule {
+  id String @id @default(cuid())
+
+  createdById String
+  createdBy   User   @relation("FareRulesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  effectiveAt DateTime
+
+  rideFareCents       Int
+  driverPayoutCents   Int
+  transactionFeeCents Int?
+
+  status FareRuleStatus @default(INACTIVE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, effectiveAt])
+  @@index([createdById, createdAt])
 }
 
 model RefreshToken {
@@ -240,23 +592,6 @@ model DriverProfile {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
-model RiderProfile {
-  id     String @id @default(cuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  phone String?
-
-  onboardingStep        Int       @default(1)
-  onboardingCompletedAt DateTime?
-  otpVerifiedAt         DateTime?
-
-  locationText  String?
-  paymentMethod RiderPaymentMethod?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
 
 model RiderOnboardingOtp {
   id     String @id @default(cuid())
@@ -266,12 +601,11 @@ model RiderOnboardingOtp {
   otpHash   String
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([userId])
   @@index([expiresAt])
 }
-
 
 model Vehicle {
   id       String        @id @default(cuid())
@@ -397,9 +731,9 @@ model Trip {
   reviews       TripReview[]
   emergencies   EmergencyAlert[]
 
-  publicShareToken String? @unique
-  qrTokenHash      String? @unique
-  qrTokenIssuedAt DateTime?
+  publicShareToken String?   @unique
+  qrTokenHash      String?   @unique
+  qrTokenIssuedAt  DateTime?
   qrTokenExpiresAt DateTime?
 
   createdAt                 DateTime                   @default(now())
@@ -620,6 +954,34 @@ model DriverWithdrawalRequest {
   @@index([userId, createdAt])
   @@index([walletId, createdAt])
   @@index([status, createdAt])
+}
+
+model UserNotification {
+  id String @id @default(cuid())
+
+  // receiver
+  userId String
+  user   User   @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  // who created it (admin/system/optional user)
+  source       NotificationSource @default(SYSTEM)
+  sourceUserId String?
+  sourceUser   User?              @relation("UserNotificationSource", fields: [sourceUserId], references: [id], onDelete: SetNull)
+
+  category NotificationCategory @default(SYSTEM)
+
+  title     String
+  body      String
+  ctaLabel  String?
+  actionUrl String?
+  data      Json?
+
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt, createdAt])
+  @@index([sourceUserId])
 }
 
 model DriverEarningTransaction {

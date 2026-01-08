@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, type ReactNode } from "react";
+import React, { useEffect, useMemo, useState, type ReactNode, FormEvent } from "react";
 import Image from "next/image";
 import {
   User,
@@ -16,27 +16,132 @@ import {
 import { RiderDashboardShell } from "@/src/components/RiderDashboardShell";
 
 /* -------------------------------------------------------------------------- */
-/*  TYPES & MOCK DATA                                                         */
+/*  API HELPERS                                                               */
 /* -------------------------------------------------------------------------- */
 
-type ProfileSection =
-  | "personalInfo"
-  | "identity"
-  | "location"
-  | "payment"
-  | "security"
-  | "settings";
+function getBackendBaseUrl() {
+  let base = (process.env.NEXT_PUBLIC_API_URL ?? "").trim();
+  base = base.replace(/\/+$/, "");
+  if (!base) return "http://localhost:4000";
+  if (base.endsWith("/api")) base = base.slice(0, -4);
+  return base;
+}
 
+function getAccessToken(): string | null {
+  if (typeof window === "undefined") return null;
+  const keys = ["accessToken", "token", "access_token", "jwt", "authToken"];
+  for (const k of keys) {
+    const v = localStorage.getItem(k);
+    if (v && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+function getRefreshToken(): string | null {
+  if (typeof window === "undefined") return null;
+  const v = localStorage.getItem("refreshToken");
+  return v && v.trim() ? v.trim() : null;
+}
+
+async function postJsonFirstWorking(base: string, paths: string[], body: any): Promise<Response> {
+  for (const path of paths) {
+    const res = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 404) continue;
+    return res;
+  }
+  // last try returns 404
+  return fetch(`${base}${paths[0]}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function refreshAccessToken(): Promise<string | null> {
+  const base = getBackendBaseUrl();
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return null;
+
+  const res = await postJsonFirstWorking(base, ["/api/auth/refresh", "/auth/refresh", "/api/refresh"], { refreshToken });
+  if (!res.ok) return null;
+
+  const data = (await res.json()) as { accessToken?: string };
+  if (!data?.accessToken) return null;
+
+  localStorage.setItem("accessToken", data.accessToken);
+  return data.accessToken;
+}
+
+async function apiFetch<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
+  const base = getBackendBaseUrl();
+  const token = getAccessToken();
+
+  const headers: Record<string, string> = {
+    ...(init?.method && init.method !== "GET" ? { "Content-Type": "application/json" } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+
+  const res = await fetch(`${base}${path}`, {
+    ...init,
+    headers: {
+      ...headers,
+      ...(init?.headers ?? {}),
+    } as any,
+  });
+
+  if (res.status === 401 && !retried) {
+    const newToken = await refreshAccessToken();
+    if (newToken) {
+      const retryRes = await fetch(`${base}${path}`, {
+        ...init,
+        headers: {
+          ...(init?.method && init.method !== "GET" ? { "Content-Type": "application/json" } : {}),
+          Authorization: `Bearer ${newToken}`,
+          ...(init?.headers ?? {}),
+        } as any,
+      });
+
+      const data2 = (await retryRes.json()) as any;
+      if (!retryRes.ok) {
+        throw new Error(retryRes.status === 401 ? "UNAUTHORIZED — Please login again." : (data2?.error || "Request failed"));
+      }
+      return data2 as T;
+    }
+
+    throw new Error("UNAUTHORIZED — Please login again.");
+  }
+
+  const data = (await res.json()) as any;
+  if (!res.ok) {
+    throw new Error(res.status === 401 ? "UNAUTHORIZED — Please login again." : (data?.error || "Request failed"));
+  }
+  return data as T;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  TYPES                                                                     */
+/* -------------------------------------------------------------------------- */
+
+type ProfileSection = "personalInfo" | "identity" | "location" | "payment" | "security" | "settings";
 type IdentityView = "main" | "governmentId";
 type SettingsView = "main" | "language" | "notifications";
 type LocationTarget = "home" | "work";
 type LanguageOption = "English" | "Spanish";
+
+type VerificationStatus = "PENDING" | "VERIFIED" | "REJECTED";
 
 type RiderProfile = {
   name: string;
   email: string;
   location: string;
   phone: string;
+  homeAddress: string;
+  workAddress: string;
+  avatarUrl: string;
 };
 
 type LocationInfo = {
@@ -49,48 +154,33 @@ type PaymentMethod = {
   label: string;
   secondary: string;
   isDefault?: boolean;
+  type?: string;
 };
 
-const MOCK_RIDER: RiderProfile = {
-  name: "John Doe",
-  email: "adexco@gentr.gmail",
-  location: "Illinois, US",
-  phone: "+143685355",
+type ApiRes = {
+  ok: boolean;
+  error?: string;
 };
 
-const MOCK_LOCATIONS: LocationInfo = {
-  homeAddress: "Transcorp, Ill, US",
-  workAddress: "1537 Avenue, County, US",
+type ProfileRes = ApiRes & {
+  profile: RiderProfile;
+  identity: {
+    governmentId: { status: VerificationStatus; url: string };
+    selfie: { status: VerificationStatus; url: string };
+  };
+  paymentMethods: PaymentMethod[];
+  security: {
+    faceRecognitionEnabled: boolean;
+    twoFactorEnabled: boolean;
+  };
+  settings: {
+    language: LanguageOption;
+    rideUpdates: boolean;
+    paymentAlerts: boolean;
+    shiftReminders: boolean;
+    serviceAlerts: boolean;
+  };
 };
-
-const MOCK_PAYMENT_METHODS: PaymentMethod[] = [
-  {
-    id: "apple",
-    label: "Apple pay",
-    secondary: "adexco@gentr.gmail",
-    isDefault: true,
-  },
-  {
-    id: "paypal",
-    label: "Paypal",
-    secondary: "adexco@gentr.gmail",
-  },
-  {
-    id: "visa",
-    label: "Visa",
-    secondary: "James Rodri",
-  },
-  {
-    id: "gpay",
-    label: "G pay",
-    secondary: "adexco@gentr.gmail",
-  },
-  {
-    id: "cashapp",
-    label: "Cashapp",
-    secondary: "adexco@gentr.gmail",
-  },
-];
 
 /* -------------------------------------------------------------------------- */
 /*  HELPERS                                                                   */
@@ -113,38 +203,76 @@ function getSectionTitle(section: ProfileSection): string {
   }
 }
 
+function prettyStatus(s: VerificationStatus) {
+  if (s === "VERIFIED") return { label: "Verified", variant: "success" as const };
+  if (s === "REJECTED") return { label: "Rejected", variant: "danger" as const };
+  return { label: "Pending", variant: "neutral" as const };
+}
+
 /* -------------------------------------------------------------------------- */
 /*  PAGE                                                                      */
 /* -------------------------------------------------------------------------- */
 
 export default function RiderProfilePage() {
   const [section, setSection] = useState<ProfileSection>("personalInfo");
-  const [mobileSection, setMobileSection] = useState<ProfileSection | null>(
-    null,
-  );
+  const [mobileSection, setMobileSection] = useState<ProfileSection | null>(null);
 
   const [identityView, setIdentityView] = useState<IdentityView>("main");
   const [settingsView, setSettingsView] = useState<SettingsView>("main");
 
-  const [language, setLanguage] = useState<LanguageOption>("English");
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  const [rider] = useState<RiderProfile>(MOCK_RIDER);
-  const [locations, setLocations] = useState<LocationInfo>(MOCK_LOCATIONS);
-  const [paymentMethods] = useState<PaymentMethod[]>(MOCK_PAYMENT_METHODS);
-
-  const [securityState, setSecurityState] = useState({
+  const [rider, setRider] = useState<RiderProfile | null>(null);
+  const [identity, setIdentity] = useState<ProfileRes["identity"] | null>(null);
+  const [locations, setLocations] = useState<LocationInfo | null>(null);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [securityState, setSecurityState] = useState<{ faceRecognition: boolean; twoFactorAuth: boolean }>({
     faceRecognition: true,
     twoFactorAuth: false,
   });
+  const [prefs, setPrefs] = useState<ProfileRes["settings"] | null>(null);
 
-  const [locationChangeTarget, setLocationChangeTarget] =
-    useState<LocationTarget | null>(null);
+  const [locationChangeTarget, setLocationChangeTarget] = useState<LocationTarget | null>(null);
   const [showChangePassword, setShowChangePassword] = useState(false);
+
+  const isVerified = useMemo(() => {
+    if (!identity) return false;
+    return identity.governmentId.status === "VERIFIED" && identity.selfie.status === "VERIFIED";
+  }, [identity]);
+
+  const load = async () => {
+    try {
+      setErr(null);
+      setLoading(true);
+      const data = await apiFetch<ProfileRes>("/api/rider/profile");
+      if (!data.ok) throw new Error(data.error || "Failed to load profile");
+
+      setRider(data.profile);
+      setIdentity(data.identity);
+      setLocations({ homeAddress: data.profile.homeAddress, workAddress: data.profile.workAddress });
+      setPaymentMethods(data.paymentMethods || []);
+      setSecurityState({
+        faceRecognition: data.security.faceRecognitionEnabled,
+        twoFactorAuth: data.security.twoFactorEnabled,
+      });
+      setPrefs(data.settings);
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to load profile");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSidebarClick = (next: ProfileSection) => {
     setSection(next);
     setMobileSection(next);
-    // reset nested views when switching main section
     setIdentityView("main");
     setSettingsView("main");
   };
@@ -155,13 +283,125 @@ export default function RiderProfilePage() {
     setSettingsView("main");
   };
 
-  const handleSaveLocation = (target: LocationTarget, value: string) => {
-    setLocations((prev) =>
-      target === "home"
-        ? { ...prev, homeAddress: value }
-        : { ...prev, workAddress: value },
-    );
+  const requestLocationChange = async (target: LocationTarget, value: string) => {
+    try {
+      setSaving(true);
+      await apiFetch<ApiRes>("/api/rider/profile/locations/request", {
+        method: "POST",
+        body: JSON.stringify({
+          target: target === "home" ? "HOME" : "WORK",
+          requestedAddress: value,
+        }),
+      });
+      // addresses remain approved values; request goes to admin
+      setLocationChangeTarget(null);
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to request change");
+    } finally {
+      setSaving(false);
+    }
   };
+
+  const changePassword = async (oldPassword: string, newPassword: string) => {
+    try {
+      setSaving(true);
+      await apiFetch<ApiRes>("/api/rider/profile/change-password", {
+        method: "POST",
+        body: JSON.stringify({ oldPassword, newPassword }),
+      });
+      setShowChangePassword(false);
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to change password");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateSecurity = async (patch: Partial<{ faceRecognitionEnabled: boolean; twoFactorEnabled: boolean }>) => {
+    try {
+      await apiFetch<ApiRes>("/api/rider/profile/security", {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      });
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to update security");
+      await load();
+    }
+  };
+
+  const updateSettings = async (patch: Partial<ProfileRes["settings"]>) => {
+    try {
+      const res = await apiFetch<{ ok: boolean; settings?: ProfileRes["settings"]; error?: string }>("/api/rider/profile/settings", {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(res.error || "Failed to update settings");
+      if (res.settings) setPrefs(res.settings);
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to update settings");
+      await load();
+    }
+  };
+
+  const updateIdentityUrl = async (type: "government-id" | "selfie", url: string) => {
+    try {
+      setSaving(true);
+      const res = await apiFetch<{ ok: boolean; doc?: { type: string; status: VerificationStatus; url: string }; error?: string }>(
+        `/api/rider/profile/identity/${type}`,
+        { method: "PATCH", body: JSON.stringify({ url }) }
+      );
+      if (!res.ok || !res.doc) throw new Error(res.error || "Failed to update identity");
+
+      setIdentity((prev) => {
+        if (!prev) return prev;
+        if (type === "government-id") {
+          return { ...prev, governmentId: { status: res.doc!.status, url: res.doc!.url } };
+        }
+        return { ...prev, selfie: { status: res.doc!.status, url: res.doc!.url } };
+      });
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to update identity");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <RiderDashboardShell>
+        <div className="rounded-2xl border border-slate-800 bg-[#050f25] p-4 text-sm text-slate-200">
+          Loading profile…
+        </div>
+      </RiderDashboardShell>
+    );
+  }
+
+  if (err && !rider) {
+    return (
+      <RiderDashboardShell>
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+          {err}
+          <button
+            type="button"
+            onClick={load}
+            className="mt-3 rounded-lg bg-[#07152f] px-3 py-2 text-xs text-slate-200 hover:bg-[#0b1b3a]"
+          >
+            Retry
+          </button>
+        </div>
+      </RiderDashboardShell>
+    );
+  }
+
+  if (!rider || !locations || !identity || !prefs) {
+    return (
+      <RiderDashboardShell>
+        <div className="rounded-2xl border border-slate-800 bg-[#050f25] p-4 text-sm text-slate-200">
+          Profile data missing.
+        </div>
+      </RiderDashboardShell>
+    );
+  }
 
   return (
     <RiderDashboardShell>
@@ -169,69 +409,64 @@ export default function RiderProfilePage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-sm font-semibold text-slate-100">Profile</h1>
+          {saving ? <span className="text-[11px] text-slate-400">Saving…</span> : null}
         </div>
+
+        {err ? (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] text-amber-200">
+            {err}
+          </div>
+        ) : null}
 
         {/* DESKTOP LAYOUT */}
         <div className="hidden items-start gap-6 lg:grid lg:grid-cols-3">
-          {/* LEFT COLUMN */}
           <div className="lg:col-span-1">
-            <ProfileSidebar
-              rider={rider}
-              activeSection={section}
-              onSectionChange={handleSidebarClick}
-            />
+            <ProfileSidebar rider={rider} verified={isVerified} activeSection={section} onSectionChange={handleSidebarClick} />
           </div>
 
-          {/* RIGHT COLUMN */}
           <section className="lg:col-span-2 rounded-2xl border border-slate-800 bg-[#050f25] p-4 text-xs text-slate-200 sm:p-6">
             {section === "personalInfo" && <PersonalInfoPanel rider={rider} />}
 
             {section === "identity" && (
               <IdentityPanel
                 view={identityView}
+                identity={identity}
                 onOpenGovernmentId={() => setIdentityView("governmentId")}
                 onBackToMain={() => setIdentityView("main")}
+                onSetGovernmentIdUrl={(url) => updateIdentityUrl("government-id", url)}
+                onSetSelfieUrl={(url) => updateIdentityUrl("selfie", url)}
               />
             )}
 
-            {section === "location" && (
-              <LocationPanel
-                locations={locations}
-                onRequestChange={(target) => setLocationChangeTarget(target)}
-              />
-            )}
+            {section === "location" && <LocationPanel locations={locations} onRequestChange={(t) => setLocationChangeTarget(t)} />}
 
-            {section === "payment" && (
-              <PaymentMethodsPanel methods={paymentMethods} />
-            )}
+            {section === "payment" && <PaymentMethodsPanel methods={paymentMethods} />}
 
             {section === "security" && (
               <RiderSecurityPanel
                 state={securityState}
                 onOpenChangePassword={() => setShowChangePassword(true)}
-                onToggleFace={() =>
-                  setSecurityState((prev) => ({
-                    ...prev,
-                    faceRecognition: !prev.faceRecognition,
-                  }))
-                }
-                onToggleTwoFactor={() =>
-                  setSecurityState((prev) => ({
-                    ...prev,
-                    twoFactorAuth: !prev.twoFactorAuth,
-                  }))
-                }
+                onToggleFace={() => {
+                  setSecurityState((p) => ({ ...p, faceRecognition: !p.faceRecognition }));
+                  updateSecurity({ faceRecognitionEnabled: !securityState.faceRecognition });
+                }}
+                onToggleTwoFactor={() => {
+                  setSecurityState((p) => ({ ...p, twoFactorAuth: !p.twoFactorAuth }));
+                  updateSecurity({ twoFactorEnabled: !securityState.twoFactorAuth });
+                }}
               />
             )}
 
             {section === "settings" && (
               <SettingsPanel
                 view={settingsView}
-                language={language}
+                language={prefs.language}
+                prefs={prefs}
                 onOpenLanguage={() => setSettingsView("language")}
                 onOpenNotifications={() => setSettingsView("notifications")}
                 onBackToMain={() => setSettingsView("main")}
-                onChangeLanguage={setLanguage}
+                onChangeLanguage={(lang) => updateSettings({ language: lang })}
+                onChangePrefs={(patch) => updateSettings(patch)}
               />
             )}
           </section>
@@ -240,68 +475,51 @@ export default function RiderProfilePage() {
         {/* MOBILE LAYOUT */}
         <div className="space-y-4 lg:hidden">
           {mobileSection === null ? (
-            <ProfileSidebar
-              rider={rider}
-              activeSection={section}
-              onSectionChange={handleSidebarClick}
-            />
+            <ProfileSidebar rider={rider} verified={isVerified} activeSection={section} onSectionChange={handleSidebarClick} />
           ) : (
-            <MobileSectionContainer
-              title={getSectionTitle(mobileSection)}
-              onBack={closeMobileSection}
-            >
-              {mobileSection === "personalInfo" && (
-                <PersonalInfoPanel rider={rider} />
-              )}
+            <MobileSectionContainer title={getSectionTitle(mobileSection)} onBack={closeMobileSection}>
+              {mobileSection === "personalInfo" && <PersonalInfoPanel rider={rider} />}
 
               {mobileSection === "identity" && (
                 <IdentityPanel
                   view={identityView}
+                  identity={identity}
                   onOpenGovernmentId={() => setIdentityView("governmentId")}
                   onBackToMain={() => setIdentityView("main")}
+                  onSetGovernmentIdUrl={(url) => updateIdentityUrl("government-id", url)}
+                  onSetSelfieUrl={(url) => updateIdentityUrl("selfie", url)}
                 />
               )}
 
-              {mobileSection === "location" && (
-                <LocationPanel
-                  locations={locations}
-                  onRequestChange={(target) => setLocationChangeTarget(target)}
-                />
-              )}
+              {mobileSection === "location" && <LocationPanel locations={locations} onRequestChange={(t) => setLocationChangeTarget(t)} />}
 
-              {mobileSection === "payment" && (
-                <PaymentMethodsPanel methods={paymentMethods} />
-              )}
+              {mobileSection === "payment" && <PaymentMethodsPanel methods={paymentMethods} />}
 
               {mobileSection === "security" && (
                 <RiderSecurityPanel
                   state={securityState}
                   onOpenChangePassword={() => setShowChangePassword(true)}
-                  onToggleFace={() =>
-                    setSecurityState((prev) => ({
-                      ...prev,
-                      faceRecognition: !prev.faceRecognition,
-                    }))
-                  }
-                  onToggleTwoFactor={() =>
-                    setSecurityState((prev) => ({
-                      ...prev,
-                      twoFactorAuth: !prev.twoFactorAuth,
-                    }))
-                  }
+                  onToggleFace={() => {
+                    setSecurityState((p) => ({ ...p, faceRecognition: !p.faceRecognition }));
+                    updateSecurity({ faceRecognitionEnabled: !securityState.faceRecognition });
+                  }}
+                  onToggleTwoFactor={() => {
+                    setSecurityState((p) => ({ ...p, twoFactorAuth: !p.twoFactorAuth }));
+                    updateSecurity({ twoFactorEnabled: !securityState.twoFactorAuth });
+                  }}
                 />
               )}
 
               {mobileSection === "settings" && (
                 <SettingsPanel
                   view={settingsView}
-                  language={language}
+                  language={prefs.language}
+                  prefs={prefs}
                   onOpenLanguage={() => setSettingsView("language")}
-                  onOpenNotifications={() =>
-                    setSettingsView("notifications")
-                  }
+                  onOpenNotifications={() => setSettingsView("notifications")}
                   onBackToMain={() => setSettingsView("main")}
-                  onChangeLanguage={setLanguage}
+                  onChangeLanguage={(lang) => updateSettings({ language: lang })}
+                  onChangePrefs={(patch) => updateSettings(patch)}
                 />
               )}
             </MobileSectionContainer>
@@ -309,32 +527,21 @@ export default function RiderProfilePage() {
         </div>
       </div>
 
-      {/* CHANGE LOCATION OVERLAY (My location -> Request change) */}
+      {/* LOCATION REQUEST OVERLAY */}
       {locationChangeTarget && (
         <ChangeLocationOverlay
           target={locationChangeTarget}
-          initialValue={
-            locationChangeTarget === "home"
-              ? locations.homeAddress
-              : locations.workAddress
-          }
+          initialValue={locationChangeTarget === "home" ? locations.homeAddress : locations.workAddress}
           onClose={() => setLocationChangeTarget(null)}
-          onSave={(value) => {
-            handleSaveLocation(locationChangeTarget, value);
-            setLocationChangeTarget(null);
-          }}
+          onSave={(value) => requestLocationChange(locationChangeTarget, value)}
         />
       )}
 
-      {/* CHANGE PASSWORD OVERLAY (Security -> Change password) */}
+      {/* CHANGE PASSWORD OVERLAY */}
       {showChangePassword && (
         <ChangePasswordOverlay
           onClose={() => setShowChangePassword(false)}
-          onSave={(oldPassword, newPassword) => {
-            // later: hook real API
-            console.log("Rider change password", { oldPassword, newPassword });
-            setShowChangePassword(false);
-          }}
+          onSave={(oldPassword, newPassword) => changePassword(oldPassword, newPassword)}
         />
       )}
     </RiderDashboardShell>
@@ -342,46 +549,43 @@ export default function RiderProfilePage() {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  LEFT SIDEBAR                                                              */
+/*  SIDEBAR                                                                   */
 /* -------------------------------------------------------------------------- */
 
 function ProfileSidebar({
   rider,
+  verified,
   activeSection,
   onSectionChange,
 }: {
   rider: RiderProfile;
+  verified: boolean;
   activeSection: ProfileSection;
   onSectionChange: (s: ProfileSection) => void;
 }) {
   return (
     <aside className="space-y-4">
-      {/* Rider summary card */}
       <div className="rounded-2xl border border-slate-800 bg-[#050f25] px-5 py-5 text-xs text-slate-200">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="relative h-10 w-10 overflow-hidden rounded-full border border-slate-600">
-              <Image
-                src="/maxwell.png"
-                alt={rider.name}
-                fill
-                className="object-cover"
-              />
+              <Image src={rider.avatarUrl || "/maxwell.png"} alt={rider.name} fill className="object-cover" />
             </div>
             <div className="space-y-0.5">
-              <div className="text-sm font-semibold text-slate-50">
-                {rider.name}
-              </div>
-              <div className="text-[11px] text-slate-400">{rider.email}</div>
+              <div className="text-sm font-semibold text-slate-50">{rider.name || "-"}</div>
+              <div className="text-[11px] text-slate-400">{rider.email || "-"}</div>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-medium text-emerald-400">
-            Verified
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-medium ${
+              verified ? "bg-emerald-500/10 text-emerald-400" : "bg-slate-500/10 text-slate-300"
+            }`}
+          >
+            {verified ? "Verified" : "Not verified"}
           </span>
         </div>
       </div>
 
-      {/* Menu */}
       <nav className="rounded-2xl border border-slate-800 bg-[#050f25] p-2 text-xs text-slate-200">
         <ProfileNavItem
           icon={<User className="h-3.5 w-3.5" />}
@@ -414,7 +618,7 @@ function ProfileSidebar({
         <ProfileNavItem
           icon={<Shield className="h-3.5 w-3.5" />}
           title="Security"
-          description="Protect your account with Face Recognition sign-in"
+          description="Protect your account"
           active={activeSection === "security"}
           onClick={() => onSectionChange("security")}
         />
@@ -448,9 +652,7 @@ function ProfileNavItem({
       type="button"
       onClick={onClick}
       className={`flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition-colors ${
-        active
-          ? "bg-[#0b1735] text-slate-50"
-          : "bg-transparent text-slate-200 hover:bg-[#060f24]"
+        active ? "bg-[#0b1735] text-slate-50" : "bg-transparent text-slate-200 hover:bg-[#060f24]"
       }`}
     >
       <span className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-blue-600/15 text-blue-400">
@@ -466,7 +668,7 @@ function ProfileNavItem({
 }
 
 /* -------------------------------------------------------------------------- */
-/*  MOBILE SECTION CONTAINER                                                  */
+/*  MOBILE CONTAINER                                                          */
 /* -------------------------------------------------------------------------- */
 
 function MobileSectionContainer({
@@ -496,16 +698,10 @@ function MobileSectionContainer({
 }
 
 /* -------------------------------------------------------------------------- */
-/*  SHARED SMALL HELPERS                                                      */
+/*  SHARED                                                                    */
 /* -------------------------------------------------------------------------- */
 
-function SectionHeader({
-  title,
-  subtitle,
-}: {
-  title: string;
-  subtitle: string;
-}) {
+function SectionHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <header className="mb-4 space-y-1">
       <h2 className="text-sm font-semibold text-slate-100">{title}</h2>
@@ -519,7 +715,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between border-b border-slate-800/70 px-4 py-3 last:border-b-0">
       <div>
         <div className="text-[11px] text-slate-400">{label}</div>
-        <div className="text-[11px] font-medium text-slate-100">{value}</div>
+        <div className="text-[11px] font-medium text-slate-100">{value || "-"}</div>
       </div>
       <ChevronRight className="h-3 w-3 text-slate-500" />
     </div>
@@ -533,8 +729,7 @@ function StatusPill({
   label: string;
   variant?: "success" | "danger" | "neutral";
 }) {
-  const base =
-    "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-medium";
+  const base = "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-medium";
   const color =
     variant === "success"
       ? "bg-emerald-500/15 text-emerald-400"
@@ -545,13 +740,7 @@ function StatusPill({
   return <span className={`${base} ${color}`}>{label}</span>;
 }
 
-function Toggle({
-  checked,
-  onChange,
-}: {
-  checked: boolean;
-  onChange: (value: boolean) => void;
-}) {
+function Toggle({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
   return (
     <button
       type="button"
@@ -574,30 +763,18 @@ function Toggle({
 /*  PANELS                                                                    */
 /* -------------------------------------------------------------------------- */
 
-/* -- Personal info --------------------------------------------------------- */
-
 function PersonalInfoPanel({ rider }: { rider: RiderProfile }) {
   return (
     <div className="space-y-4">
-      <SectionHeader
-        title="Personal information"
-        subtitle="Update your basic details like phone number, email."
-      />
+      <SectionHeader title="Personal information" subtitle="Your current account details." />
 
       <div className="flex flex-col items-center gap-3 pb-2">
         <div className="relative h-20 w-20 overflow-hidden rounded-full border border-slate-600">
-          <Image
-            src="/maxwell.png"
-            alt={rider.name}
-            fill
-            className="object-cover"
-          />
+          <Image src={rider.avatarUrl || "/maxwell.png"} alt={rider.name} fill className="object-cover" />
         </div>
         <div className="text-center">
-          <div className="text-sm font-medium text-slate-100">
-            {rider.name}
-          </div>
-          <div className="text-[11px] text-slate-400">{rider.email}</div>
+          <div className="text-sm font-medium text-slate-100">{rider.name || "-"}</div>
+          <div className="text-[11px] text-slate-400">{rider.email || "-"}</div>
         </div>
       </div>
 
@@ -611,62 +788,75 @@ function PersonalInfoPanel({ rider }: { rider: RiderProfile }) {
   );
 }
 
-/* -- Identity + Government ID --------------------------------------------- */
-
 function IdentityPanel({
   view,
+  identity,
   onOpenGovernmentId,
   onBackToMain,
+  onSetGovernmentIdUrl,
+  onSetSelfieUrl,
 }: {
   view: IdentityView;
+  identity: {
+    governmentId: { status: VerificationStatus; url: string };
+    selfie: { status: VerificationStatus; url: string };
+  };
   onOpenGovernmentId: () => void;
   onBackToMain: () => void;
+  onSetGovernmentIdUrl: (url: string) => void;
+  onSetSelfieUrl: (url: string) => void;
 }) {
   if (view === "governmentId") {
-    return <GovernmentIdPanel onBackToMain={onBackToMain} />;
+    return (
+      <GovernmentIdPanel
+        onBackToMain={onBackToMain}
+        currentUrl={identity.governmentId.url}
+        status={identity.governmentId.status}
+        onSaveUrl={onSetGovernmentIdUrl}
+      />
+    );
   }
+
+  const gov = prettyStatus(identity.governmentId.status);
+  const sf = prettyStatus(identity.selfie.status);
 
   return (
     <div className="space-y-4">
-      <SectionHeader
-        title="Identity verification"
-        subtitle="Verify your identity with your government issued ID."
-      />
+      <SectionHeader title="Identity verification" subtitle="Verify your identity with your government issued ID." />
 
       <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#07152f] text-[11px]">
-        {/* Government ID row (click -> Figma-like page) */}
         <button
           type="button"
           onClick={onOpenGovernmentId}
           className="flex w-full items-center justify-between border-b border-slate-800/70 px-4 py-3 text-left"
         >
           <div>
-            <div className="text-[11px] font-semibold text-slate-100">
-              Government ID
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Provide your official identification document.
-            </div>
+            <div className="text-[11px] font-semibold text-slate-100">Government ID</div>
+            <div className="text-[10px] text-slate-400">Provide your official identification document.</div>
           </div>
           <div className="flex items-center gap-2">
-            <StatusPill label="Verified" variant="success" />
+            <StatusPill label={gov.label} variant={gov.variant} />
             <ChevronRight className="h-3 w-3 text-slate-500" />
           </div>
         </button>
 
-        {/* Selfie row (still inline summary) */}
         <div className="flex items-center justify-between px-4 py-3">
           <div>
-            <div className="text-[11px] font-semibold text-slate-100">
-              Selfie
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Upload a clear selfie photo for additional verification.
-            </div>
+            <div className="text-[11px] font-semibold text-slate-100">Selfie</div>
+            <div className="text-[10px] text-slate-400">Paste selfie URL for now (can be replaced with upload later).</div>
           </div>
           <div className="flex items-center gap-2">
-            <StatusPill label="Not verified" variant="danger" />
-            <ChevronRight className="h-3 w-3 text-slate-500" />
+            <StatusPill label={sf.label} variant={sf.variant} />
+            <button
+              type="button"
+              onClick={() => {
+                const url = window.prompt("Paste selfie image URL:");
+                if (url && url.trim()) onSetSelfieUrl(url.trim());
+              }}
+              className="rounded-full bg-blue-600 px-3 py-1 text-[10px] font-medium text-white hover:bg-blue-700"
+            >
+              Set URL
+            </button>
           </div>
         </div>
       </div>
@@ -676,14 +866,29 @@ function IdentityPanel({
 
 function GovernmentIdPanel({
   onBackToMain,
+  currentUrl,
+  status,
+  onSaveUrl,
 }: {
   onBackToMain: () => void;
+  currentUrl: string;
+  status: VerificationStatus;
+  onSaveUrl: (url: string) => void;
 }) {
   const [docType] = useState("Government ID");
+  const [url, setUrl] = useState(currentUrl || "");
+
+  const st = prettyStatus(status);
+
+  const handleSave = (e: FormEvent) => {
+    e.preventDefault();
+    const v = url.trim();
+    if (!v) return;
+    onSaveUrl(v);
+  };
 
   return (
     <div className="space-y-4">
-      {/* Top row like Figma: back + title */}
       <div className="mb-1 flex items-center gap-3">
         <button
           type="button"
@@ -692,59 +897,48 @@ function GovernmentIdPanel({
         >
           <ArrowLeft className="h-4 w-4 text-slate-200" />
         </button>
-        <span className="text-sm font-semibold text-slate-100">
-          Government ID
-        </span>
+        <span className="text-sm font-semibold text-slate-100">Government ID</span>
+        <StatusPill label={st.label} variant={st.variant} />
       </div>
 
-      {/* Content card */}
       <div className="space-y-4 rounded-2xl border border-slate-800 bg-[#07152f] p-4 text-[11px]">
-        {/* Fake select (matches the top dropdown look) */}
         <div className="space-y-1">
           <label className="text-[11px] text-slate-400">Document type</label>
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-lg border border-slate-700 bg-[#020818] px-3 py-2"
-          >
+          <button type="button" className="flex w-full items-center justify-between rounded-lg border border-slate-700 bg-[#020818] px-3 py-2">
             <span className="text-[11px] text-slate-100">{docType}</span>
             <ChevronDown className="h-4 w-4 text-slate-500" />
           </button>
         </div>
 
-        {/* Image preview frame */}
         <div className="flex justify-center pt-2">
           <div className="relative h-48 w-40 overflow-hidden rounded-2xl border-2 border-blue-500/60 bg-[#020818]">
-            {/* Put some placeholder ID image under /public/id-sample.png if you like */}
-            <Image
-              src="/id-sample.png"
+            <img
+              src={url || "/id-sample.png"}
               alt="Government ID preview"
-              fill
-              className="object-cover"
+              className="h-full w-full object-cover"
             />
           </div>
         </div>
 
-        {/* Select from gallery button */}
-        <button
-          type="button"
-          className="mt-2 w-full rounded-lg bg-blue-600 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          Select from gallery
-        </button>
-
-        {/* Small bottom icon circle (like camera icon space) */}
-        <div className="flex justify-center pt-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-700 bg-[#020818] text-[13px] text-slate-300">
-            {/* You can replace with an actual camera icon later */}
-            📷
-          </div>
-        </div>
+        <form onSubmit={handleSave} className="space-y-2">
+          <label className="text-[11px] text-slate-400">Government ID image URL</label>
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            className="w-full rounded-lg border border-slate-700 bg-[#020818] px-3 py-2 text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none"
+            placeholder="https://..."
+          />
+          <button
+            type="submit"
+            className="mt-2 w-full rounded-lg bg-blue-600 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            Save
+          </button>
+        </form>
       </div>
     </div>
   );
 }
-
-/* -- Location --------------------------------------------------------------- */
 
 function LocationPanel({
   locations,
@@ -755,17 +949,12 @@ function LocationPanel({
 }) {
   return (
     <div className="space-y-4">
-      <SectionHeader
-        title="My location"
-        subtitle="Your approved home and work addresses."
-      />
+      <SectionHeader title="My location" subtitle="Your approved home and work addresses." />
 
       <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#07152f] text-[11px]">
         <div className="flex items-center justify-between border-b border-slate-800/70 px-4 py-3">
           <div>
-            <div className="text-[11px] font-semibold text-slate-100">
-              {locations.homeAddress}
-            </div>
+            <div className="text-[11px] font-semibold text-slate-100">{locations.homeAddress || "-"}</div>
             <div className="text-[10px] text-slate-400">Home address</div>
           </div>
           <button
@@ -779,9 +968,7 @@ function LocationPanel({
 
         <div className="flex items-center justify-between px-4 py-3">
           <div>
-            <div className="text-[11px] font-semibold text-slate-100">
-              {locations.workAddress}
-            </div>
+            <div className="text-[11px] font-semibold text-slate-100">{locations.workAddress || "-"}</div>
             <div className="text-[10px] text-slate-400">Work address</div>
           </div>
           <button
@@ -797,52 +984,47 @@ function LocationPanel({
   );
 }
 
-/* -- Payment methods -------------------------------------------------------- */
-
 function PaymentMethodsPanel({ methods }: { methods: PaymentMethod[] }) {
   return (
     <div className="space-y-4">
-      <SectionHeader
-        title="Payment method"
-        subtitle="Manage your saved payment options."
-      />
+      <SectionHeader title="Payment method" subtitle="Your saved payment options." />
 
-      <div className="space-y-3 text-[11px]">
-        {methods.map((m) => (
-          <div
-            key={m.id}
-            className="flex items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-[#07152f] px-4 py-3"
-          >
-            <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[#101a33] text-sm font-semibold text-slate-100">
-                {m.label[0]}
+      {methods.length === 0 ? (
+        <div className="rounded-2xl border border-slate-800 bg-[#07152f] p-4 text-[11px] text-slate-300">
+          No payment methods added yet.
+        </div>
+      ) : (
+        <div className="space-y-3 text-[11px]">
+          {methods.map((m) => (
+            <div
+              key={m.id}
+              className="flex items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-[#07152f] px-4 py-3"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[#101a33] text-sm font-semibold text-slate-100">
+                  {(m.label || "P")[0]}
+                </div>
+                <div>
+                  <div className="text-[11px] font-medium text-slate-100">{m.label}</div>
+                  <div className="mt-0.5 text-[10px] text-slate-400">{m.secondary || "-"}</div>
+                </div>
               </div>
-              <div>
-                <div className="text-[11px] font-medium text-slate-100">
-                  {m.label}
-                </div>
-                <div className="mt-0.5 text-[10px] text-slate-400">
-                  {m.secondary}
-                </div>
+              <div className="flex items-center gap-3">
+                {m.isDefault && <StatusPill label="Default" variant="neutral" />}
+                <button
+                  type="button"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[#101a33] text-slate-300 hover:bg-[#131d3a]"
+                >
+                  <span className="text-[18px] leading-none">⋮</span>
+                </button>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              {m.isDefault && <StatusPill label="Default" variant="neutral" />}
-              <button
-                type="button"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-[#101a33] text-slate-300 hover:bg-[#131d3a]"
-              >
-                <span className="text-[18px] leading-none">⋮</span>
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
-
-/* -- Security --------------------------------------------------------------- */
 
 function RiderSecurityPanel({
   state,
@@ -857,97 +1039,79 @@ function RiderSecurityPanel({
 }) {
   return (
     <div className="space-y-4">
-      <SectionHeader
-        title="Security"
-        subtitle="Protect your account with Face Recognition sign-in."
-      />
+      <SectionHeader title="Security" subtitle="Protect your account settings." />
 
       <div className="rounded-2xl border border-slate-800 bg-[#07152f] text-[11px]">
-        {/* Change password -> Figma change password page (overlay) */}
         <button
           type="button"
           onClick={onOpenChangePassword}
           className="flex w-full items-center justify-between border-b border-slate-800/70 px-4 py-3 text-left"
         >
           <div>
-            <div className="text-[11px] font-semibold text-slate-100">
-              Change password
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Update your login password.
-            </div>
+            <div className="text-[11px] font-semibold text-slate-100">Change password</div>
+            <div className="text-[10px] text-slate-400">Update your login password.</div>
           </div>
           <ChevronRight className="h-3 w-3 text-slate-500" />
         </button>
 
         <div className="flex items-center justify-between border-b border-slate-800/70 px-4 py-3">
           <div>
-            <div className="text-[11px] font-semibold text-slate-100">
-              Face recognition
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Sign in securely using your face.
-            </div>
+            <div className="text-[11px] font-semibold text-slate-100">Face recognition</div>
+            <div className="text-[10px] text-slate-400">Sign in securely using your face.</div>
           </div>
           <Toggle checked={state.faceRecognition} onChange={onToggleFace} />
         </div>
 
         <div className="flex items-center justify-between px-4 py-3">
           <div>
-            <div className="text-[11px] font-semibold text-slate-100">
-              Two-Factor Authentication
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Add an extra layer of security with SMS.
-            </div>
+            <div className="text-[11px] font-semibold text-slate-100">Two-Factor Authentication</div>
+            <div className="text-[10px] text-slate-400">Add an extra layer of security.</div>
           </div>
-          <Toggle
-            checked={state.twoFactorAuth}
-            onChange={onToggleTwoFactor}
-          />
+          <Toggle checked={state.twoFactorAuth} onChange={onToggleTwoFactor} />
         </div>
       </div>
     </div>
   );
 }
 
-/* -- Settings / Language / Notifications ----------------------------------- */
-
 function SettingsPanel({
   view,
   language,
+  prefs,
   onOpenLanguage,
   onOpenNotifications,
   onBackToMain,
   onChangeLanguage,
+  onChangePrefs,
 }: {
   view: SettingsView;
   language: LanguageOption;
+  prefs: { rideUpdates: boolean; paymentAlerts: boolean; shiftReminders: boolean; serviceAlerts: boolean; language: LanguageOption };
   onOpenLanguage: () => void;
   onOpenNotifications: () => void;
   onBackToMain: () => void;
   onChangeLanguage: (value: LanguageOption) => void;
+  onChangePrefs: (patch: Partial<typeof prefs>) => void;
 }) {
   if (view === "language") {
     return (
-      <LanguagePreferencePanel
-        selected={language}
-        onSelectLanguage={(lang) => onChangeLanguage(lang)}
-        onBackToMain={onBackToMain}
-      />
+      <LanguagePreferencePanel selected={language} onSelectLanguage={onChangeLanguage} onBackToMain={onBackToMain} />
     );
   }
 
   if (view === "notifications") {
-    return <NotificationPreferencePanel onBackToMain={onBackToMain} />;
+    return (
+      <NotificationPreferencePanel
+        prefs={prefs}
+        onBackToMain={onBackToMain}
+        onChange={(patch) => onChangePrefs(patch)}
+      />
+    );
   }
 
   return (
     <div className="space-y-4">
-      <SectionHeader
-        title="Settings"
-        subtitle="Manage your language and notification preferences."
-      />
+      <SectionHeader title="Settings" subtitle="Manage your language and notification preferences." />
 
       <div className="rounded-2xl border border-slate-800 bg-[#07152f] text-[11px]">
         <button
@@ -956,12 +1120,8 @@ function SettingsPanel({
           className="flex w-full items-center justify-between border-b border-slate-800/70 px-4 py-3 text-left"
         >
           <div>
-            <div className="text-[11px] font-semibold text-slate-100">
-              Language preference
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Switch between English and Spanish.
-            </div>
+            <div className="text-[11px] font-semibold text-slate-100">Language preference</div>
+            <div className="text-[10px] text-slate-400">Switch between English and Spanish.</div>
           </div>
           <div className="ml-4 flex items-center gap-2 text-[10px] text-slate-400">
             <span className="text-[11px] text-slate-200">{language}</span>
@@ -975,12 +1135,8 @@ function SettingsPanel({
           className="flex w-full items-center justify-between px-4 py-3 text-left"
         >
           <div>
-            <div className="text-[11px] font-semibold text-slate-100">
-              Notifications preference
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Choose which updates you receive, including ride alerts.
-            </div>
+            <div className="text-[11px] font-semibold text-slate-100">Notifications preference</div>
+            <div className="text-[10px] text-slate-400">Choose which updates you receive.</div>
           </div>
           <ChevronRight className="h-3 w-3 text-slate-500" />
         </button>
@@ -1020,16 +1176,12 @@ function LanguagePreferencePanel({
             type="button"
             onClick={() => onSelectLanguage(lang)}
             className={`flex w-full items-center justify-between px-4 py-3 text-left ${
-              idx !== languages.length - 1
-                ? "border-b border-slate-800/70"
-                : ""
+              idx !== languages.length - 1 ? "border-b border-slate-800/70" : ""
             }`}
           >
             <span className="text-[11px] text-slate-100">{lang}</span>
             <span className="flex h-4 w-4 items-center justify-center rounded-full border border-slate-600">
-              {selected === lang && (
-                <span className="h-2 w-2 rounded-full bg-blue-500" />
-              )}
+              {selected === lang && <span className="h-2 w-2 rounded-full bg-blue-500" />}
             </span>
           </button>
         ))}
@@ -1039,31 +1191,22 @@ function LanguagePreferencePanel({
 }
 
 function NotificationPreferencePanel({
+  prefs,
   onBackToMain,
+  onChange,
 }: {
+  prefs: { rideUpdates: boolean; paymentAlerts: boolean; shiftReminders: boolean; serviceAlerts: boolean };
   onBackToMain: () => void;
+  onChange: (patch: Partial<typeof prefs>) => void;
 }) {
-  const [prefs, setPrefs] = useState({
-    rideUpdates: true,
-    paymentAlerts: true,
-    shiftReminders: true,
-    serviceAlerts: true,
-  });
-
-  const toggle = (key: keyof typeof prefs) => {
-    setPrefs((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
+  const toggle = (key: keyof typeof prefs) => onChange({ [key]: !prefs[key] } as any);
 
   return (
     <div className="space-y-4">
       <div className="mb-1 flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-slate-100">
-            Notification preference
-          </h2>
-          <p className="text-[11px] text-slate-400">
-            Choose which updates you receive, including ride alerts.
-          </p>
+          <h2 className="text-sm font-semibold text-slate-100">Notification preference</h2>
+          <p className="text-[11px] text-slate-400">Choose which updates you receive.</p>
         </div>
         <button
           type="button"
@@ -1077,43 +1220,23 @@ function NotificationPreferencePanel({
       <div className="rounded-2xl border border-slate-800 bg-[#07152f] text-[11px]">
         <NotificationRow
           title="Ride Updates"
-          description="Get alerts for driver assignment, pickup arrival, route changes."
-          trailing={
-            <Toggle
-              checked={prefs.rideUpdates}
-              onChange={() => toggle("rideUpdates")}
-            />
-          }
+          description="Get alerts for ride changes."
+          trailing={<Toggle checked={prefs.rideUpdates} onChange={() => toggle("rideUpdates")} />}
         />
         <NotificationRow
           title="Payment & Billing Alerts"
-          description="Receive confirmations for successful payments, refunds, and payouts."
-          trailing={
-            <Toggle
-              checked={prefs.paymentAlerts}
-              onChange={() => toggle("paymentAlerts")}
-            />
-          }
+          description="Receive confirmations for payments."
+          trailing={<Toggle checked={prefs.paymentAlerts} onChange={() => toggle("paymentAlerts")} />}
         />
         <NotificationRow
           title="Shift & Schedule Reminders"
-          description="Get reminders for upcoming scheduled rides and waiting time."
-          trailing={
-            <Toggle
-              checked={prefs.shiftReminders}
-              onChange={() => toggle("shiftReminders")}
-            />
-          }
+          description="Get reminders for scheduled rides."
+          trailing={<Toggle checked={prefs.shiftReminders} onChange={() => toggle("shiftReminders")} />}
         />
         <NotificationRow
           title="Service Alerts & Safety Notices"
-          description="Be notified about system maintenance and important safety updates."
-          trailing={
-            <Toggle
-              checked={prefs.serviceAlerts}
-              onChange={() => toggle("serviceAlerts")}
-            />
-          }
+          description="Be notified about system maintenance."
+          trailing={<Toggle checked={prefs.serviceAlerts} onChange={() => toggle("serviceAlerts")} />}
         />
       </div>
     </div>
@@ -1162,7 +1285,6 @@ function ChangeLocationOverlay({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-3 backdrop-blur-sm">
       <div className="w-full max-w-md overflow-hidden rounded-3xl border border-slate-800 bg-[#050f25] shadow-2xl">
-        {/* Header */}
         <div className="flex items-center gap-3 border-b border-slate-800 px-5 py-3 text-xs text-slate-200">
           <button
             type="button"
@@ -1174,7 +1296,6 @@ function ChangeLocationOverlay({
           <span className="text-[11px] font-medium">Change location</span>
         </div>
 
-        {/* Content */}
         <div className="space-y-4 px-6 py-6 text-xs text-slate-200">
           <div className="space-y-1">
             <label className="text-[11px] text-slate-400">{label}</label>
@@ -1192,7 +1313,7 @@ function ChangeLocationOverlay({
             onClick={() => onSave(address)}
             className="mt-2 w-full rounded-lg bg-blue-600 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
           >
-            Save
+            Send request
           </button>
         </div>
       </div>
@@ -1210,14 +1331,9 @@ function ChangePasswordOverlay({
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
 
-  const handleSave = () => {
-    onSave(oldPassword, newPassword);
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-3 backdrop-blur-sm">
       <div className="w-full max-w-md overflow-hidden rounded-3xl border border-slate-800 bg-[#050f25] shadow-2xl">
-        {/* Header */}
         <div className="flex items-center gap-3 border-b border-slate-800 px-5 py-3 text-xs text-slate-200">
           <button
             type="button"
@@ -1229,7 +1345,6 @@ function ChangePasswordOverlay({
           <span className="text-[11px] font-medium">Change password</span>
         </div>
 
-        {/* Content */}
         <div className="space-y-4 px-6 py-6 text-xs text-slate-200">
           <div className="space-y-1">
             <label className="text-[11px] text-slate-400">Old password</label>
@@ -1255,7 +1370,7 @@ function ChangePasswordOverlay({
 
           <button
             type="button"
-            onClick={handleSave}
+            onClick={() => onSave(oldPassword, newPassword)}
             className="mt-2 w-full rounded-lg bg-blue-600 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
           >
             Save

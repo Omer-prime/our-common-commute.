@@ -1,250 +1,83 @@
-// src/components/admin-charts.tsx
 "use client";
 
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  Cell,
-} from "recharts";
+import React from "react";
 
-/* -------------------------------------------------------------------------- */
-/*  MOCK DATA                                                                 */
-/* -------------------------------------------------------------------------- */
+export type RidesPoint = { date: string; value: number };
+export type RevenuePoint = { date: string; valueCents: number };
 
-type RidePoint = { day: string; value: number };
-const ridesData: RidePoint[] = [
-  { day: "Mon", value: 380 },
-  { day: "Tue", value: 560 },
-  { day: "Wed", value: 820 },
-  { day: "Thu", value: 430 },
-  { day: "Fri", value: 610 },
-  { day: "Sat", value: 520 },
-];
-
-type RevenuePoint = { day: string; value: number; active?: boolean };
-const revenueData: RevenuePoint[] = [
-  { day: "Mon", value: 3600 },
-  { day: "Tue", value: 4100 },
-  { day: "Wed", value: 5000, active: true },
-  { day: "Thu", value: 4400 },
-  { day: "Fri", value: 3900 },
-  { day: "Sat", value: 2800 },
-];
-
-// Payments chart data (can be replaced later with backend data)
-export type PaymentPoint = { month: string; value: number };
-
-const paymentData: PaymentPoint[] = [
-  { month: "Jan", value: 90000 },
-  { month: "Feb", value: 7000 },
-  { month: "Mar", value: 20000 },
-  { month: "Apr", value: 15000 },
-  { month: "May", value: 28000 },
-  { month: "Jun", value: 5000 },
-  { month: "Jul", value: 55000 },
-  { month: "Aug", value: 8000 },
-  { month: "Sep", value: 52000 },
-  { month: "Oct", value: 50000 },
-  { month: "Nov", value: 100000 },
-  { month: "Dec", value: 40000 },
-];
-
-const axisTickStyle = { fontSize: 10, fill: "#94A3B8" };
-
-/* -------------------------------------------------------------------------- */
-/*  DASHBOARD CHARTS                                                          */
-/* -------------------------------------------------------------------------- */
-
-export function RidesOverviewChart() {
-  return (
-    <div className="h-[260px] w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart
-          data={ridesData}
-          margin={{ top: 10, right: 18, left: -24, bottom: 0 }}
-        >
-          <defs>
-            <linearGradient id="ridesGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#2563FF" stopOpacity={0.35} />
-              <stop offset="100%" stopColor="#2563FF" stopOpacity={0} />
-            </linearGradient>
-          </defs>
-
-          <CartesianGrid
-            stroke="#E5EDFF"
-            strokeDasharray="3 3"
-            vertical={false}
-          />
-          <XAxis
-            dataKey="day"
-            axisLine={false}
-            tickLine={false}
-            tick={axisTickStyle}
-          />
-          <YAxis
-            axisLine={false}
-            tickLine={false}
-            tick={axisTickStyle}
-            tickFormatter={(v) => v}
-            width={32}
-          />
-          <Tooltip
-            cursor={{ stroke: "#BFDBFE", strokeWidth: 2 }}
-            contentStyle={{
-              borderRadius: 8,
-              borderColor: "#E5EDFF",
-              fontSize: 11,
-            }}
-            labelStyle={{ fontWeight: 500 }}
-          />
-          <Area
-            type="monotone"
-            dataKey="value"
-            stroke="#2563FF"
-            strokeWidth={2.2}
-            fill="url(#ridesGradient)"
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-    </div>
-  );
+function maxNum(nums: number[]) {
+  return nums.length ? Math.max(...nums) : 0;
 }
 
-export function RevenueOverviewChart() {
+export function RidesOverviewChart({ data }: { data: RidesPoint[] }) {
+  const values = data.map((d) => d.value);
+  const maxV = Math.max(1, maxNum(values));
+
   return (
-    <div className="h-[260px] w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart
-          data={revenueData}
-          margin={{ top: 10, right: 10, left: -24, bottom: 0 }}
-        >
-          <CartesianGrid
-            stroke="#E5EDFF"
-            strokeDasharray="3 3"
-            vertical={false}
-          />
-          <XAxis
-            dataKey="day"
-            axisLine={false}
-            tickLine={false}
-            tick={axisTickStyle}
-          />
-          <YAxis
-            axisLine={false}
-            tickLine={false}
-            tick={axisTickStyle}
-            tickFormatter={(v) => `$${v / 1000}k`}
-            width={40}
-          />
-          <Tooltip
-            contentStyle={{
-              borderRadius: 8,
-              borderColor: "#E5EDFF",
-              fontSize: 11,
-            }}
-            labelStyle={{ fontWeight: 500 }}
-          />
-          <Bar
-            dataKey="value"
-            radius={[6, 6, 0, 0]}
-            maxBarSize={36}
-            background={false}
-          >
-            {revenueData.map((entry, index) => (
-              <Cell
-                key={`cell-${index}`}
-                fill={entry.active ? "#2563FF" : "#E0E7FF"}
+    <div className="w-full">
+      <div className="flex items-end gap-2 h-[180px]">
+        {data.map((d) => {
+          const h = Math.round((d.value / maxV) * 160);
+          return (
+            <div key={d.date} className="flex-1 flex flex-col items-center gap-2">
+              <div
+                className="w-full rounded-xl bg-slate-200"
+                style={{ height: `${h}px` }}
+                title={`${d.date}: ${d.value}`}
               />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
+              <div className="text-[10px] text-slate-400">
+                {d.date.slice(5)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/*  PAYMENTS / TOTAL TRANSACTION OVERVIEW CHART                               */
-/* -------------------------------------------------------------------------- */
+export function RevenueOverviewChart({ data }: { data: RevenuePoint[] }) {
+  const values = data.map((d) => d.valueCents);
+  const maxV = Math.max(1, maxNum(values));
 
-export function PaymentOverviewChart({
-  data = paymentData,
-}: {
-  data?: PaymentPoint[];
-}) {
+  const w = 520;
+  const h = 180;
+  const pad = 18;
+
+  const points = data.map((d, i) => {
+    const x = pad + (i * (w - pad * 2)) / Math.max(1, data.length - 1);
+    const y = h - pad - (d.valueCents / maxV) * (h - pad * 2);
+    return { x, y, d };
+  });
+
+  const dPath = points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
+    .join(" ");
+
   return (
-    <div className="h-[260px] w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart
-          data={data}
-          margin={{ top: 10, right: 18, left: -24, bottom: 0 }}
-        >
-          <defs>
-            <linearGradient
-              id="paymentsGradient"
-              x1="0"
-              y1="0"
-              x2="0"
-              y2="1"
-            >
-              <stop offset="0%" stopColor="#2563FF" stopOpacity={0.35} />
-              <stop offset="100%" stopColor="#2563FF" stopOpacity={0} />
-            </linearGradient>
-          </defs>
+    <div className="w-full overflow-hidden">
+      <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[180px]">
+        <path d={dPath} fill="none" stroke="currentColor" strokeWidth="3" className="text-slate-400" />
+        {points.map((p) => (
+          <circle
+            key={p.d.date}
+            cx={p.x}
+            cy={p.y}
+            r="4"
+            className="fill-slate-300"
+          >
+            <title>
+              {p.d.date}: ${(p.d.valueCents / 100).toFixed(2)}
+            </title>
+          </circle>
+        ))}
+      </svg>
 
-          <CartesianGrid
-            stroke="#E5EDFF"
-            strokeDasharray="3 3"
-            vertical={false}
-          />
-
-          <XAxis
-            dataKey="month"
-            axisLine={false}
-            tickLine={false}
-            tick={axisTickStyle}
-          />
-
-          <YAxis
-            axisLine={false}
-            tickLine={false}
-            tick={axisTickStyle}
-            tickFormatter={(v: number) => `${Math.round(v / 1000)}k`}
-            width={40}
-          />
-
-          <Tooltip
-            cursor={{ stroke: "#BFDBFE", strokeWidth: 2 }}
-            contentStyle={{
-              borderRadius: 8,
-              borderColor: "#E5EDFF",
-              fontSize: 11,
-            }}
-            labelStyle={{ fontWeight: 500 }}
-            formatter={(value: number | string) => {
-              const num = Number(value);
-              return [`$${num.toLocaleString()}`, "Total"];
-            }}
-          />
-
-          <Area
-            type="monotone"
-            dataKey="value"
-            stroke="#2563FF"
-            strokeWidth={2.2}
-            fill="url(#paymentsGradient)"
-            dot={{ r: 3.5, strokeWidth: 2, stroke: "#FFFFFF" }}
-            activeDot={{ r: 5 }}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
+      <div className="mt-2 flex justify-between text-[10px] text-slate-400">
+        {data.map((d) => (
+          <span key={d.date}>{d.date.slice(5)}</span>
+        ))}
+      </div>
     </div>
   );
 }
