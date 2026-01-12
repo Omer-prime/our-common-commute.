@@ -2,12 +2,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../prisma.js";
-import {
-  PaymentStatus,
-  Role,
-  TripStatus,
-  WithdrawalStatus,
-} from "@prisma/client";
+import { PaymentStatus, Role, TripStatus, WithdrawalStatus } from "@prisma/client";
 import { requireAuth } from "../middleware/requireAuth.js";
 
 const router = Router();
@@ -26,7 +21,6 @@ function assertAdmin(req: any, res: any): boolean {
 }
 
 function formatShortDate(d: Date) {
-  // "Nov 23"
   return d.toLocaleDateString("en-US", { month: "short", day: "2-digit" });
 }
 
@@ -54,18 +48,29 @@ function toCsv(rows: Record<string, unknown>[], headers: string[]) {
   return [head, ...lines].join("\n");
 }
 
-const rangeSchema = z
-  .enum(["week", "month", "year", "all"])
-  .optional()
-  .default("month");
+// ✅ now includes "day"
+const rangeSchema = z.enum(["day", "week", "month", "year", "all"]).optional().default("month");
 
 function getRange(range: z.infer<typeof rangeSchema>) {
   const now = new Date();
+
   if (range === "all") return { start: null as Date | null, end: now };
+
   const start = new Date(now);
-  if (range === "week") start.setDate(now.getDate() - 7);
-  if (range === "month") start.setDate(now.getDate() - 30);
-  if (range === "year") start.setFullYear(now.getFullYear() - 1);
+
+  if (range === "day") {
+    start.setHours(now.getHours() - 24);
+  }
+  if (range === "week") {
+    start.setDate(now.getDate() - 7);
+  }
+  if (range === "month") {
+    start.setDate(now.getDate() - 30);
+  }
+  if (range === "year") {
+    start.setFullYear(now.getFullYear() - 1);
+  }
+
   return { start, end: now };
 }
 
@@ -92,12 +97,8 @@ router.get("/rides/summary", requireAuth, async (req, res) => {
 
   const [total, completed, cancelled] = await Promise.all([
     prisma.trip.count({ where: whereBase }),
-    prisma.trip.count({
-      where: { ...whereBase, status: TripStatus.COMPLETED },
-    }),
-    prisma.trip.count({
-      where: { ...whereBase, status: TripStatus.CANCELLED },
-    }),
+    prisma.trip.count({ where: { ...whereBase, status: TripStatus.COMPLETED } }),
+    prisma.trip.count({ where: { ...whereBase, status: TripStatus.CANCELLED } }),
   ]);
 
   const completionRate = total > 0 ? (completed / total) * 100 : 0;
@@ -120,31 +121,30 @@ router.get("/rides/top-drivers", requireAuth, async (req, res) => {
   const { start, end } = getRange(range);
 
   const group = await prisma.trip.groupBy({
-  by: ["driverId"],
-  where: {
-    status: TripStatus.COMPLETED,
-    driverId: { not: null },
-    ...(start ? { createdAt: { gte: start, lte: end } } : {}),
-  },
-  _count: { id: true }, // ✅ use a real field instead of _all
-  orderBy: { _count: { id: "desc" } }, // ✅ correct typing
-  take: 12,
-});
+    by: ["driverId"],
+    where: {
+      status: TripStatus.COMPLETED,
+      driverId: { not: null },
+      ...(start ? { createdAt: { gte: start, lte: end } } : {}),
+    },
+    _count: { id: true },
+    orderBy: { _count: { id: "desc" } },
+    take: 12,
+  });
 
-const ids = group.map((g) => g.driverId).filter(Boolean) as string[];
-const users = await prisma.user.findMany({
-  where: { id: { in: ids } },
-  select: { id: true, fullName: true },
-});
-const map = new Map(users.map((u) => [u.id, u.fullName]));
+  const ids = group.map((g) => g.driverId).filter(Boolean) as string[];
+  const users = await prisma.user.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, fullName: true },
+  });
+  const map = new Map(users.map((u) => [u.id, u.fullName]));
 
-const points = group.map((g) => ({
-  label: map.get(g.driverId as string) ?? "Unknown",
-  value: g._count?.id ?? 0, // ✅ TS safe (fixes “possibly undefined”)
-}));
+  const points = group.map((g) => ({
+    label: map.get(g.driverId as string) ?? "Unknown",
+    value: g._count?.id ?? 0,
+  }));
 
-return res.json({ ok: true, points });
-
+  return res.json({ ok: true, points });
 });
 
 router.get("/rides", requireAuth, async (req, res) => {
@@ -154,8 +154,7 @@ router.get("/rides", requireAuth, async (req, res) => {
   const q = parsed.q.trim();
   const skip = (parsed.page - 1) * parsed.limit;
 
-  const range = parsed.range;
-  const { start, end } = getRange(range);
+  const { start, end } = getRange(parsed.range);
 
   const where: any = {
     ...(start ? { createdAt: { gte: start, lte: end } } : {}),
@@ -191,7 +190,6 @@ router.get("/rides", requireAuth, async (req, res) => {
     }),
   ]);
 
-  // payout: try to use latest ACTIVE fare rule ratio if available, otherwise fallback 75%
   const activeRule = await prisma.fareRule.findFirst({
     where: { status: "ACTIVE" },
     orderBy: { effectiveAt: "desc" },
@@ -228,7 +226,7 @@ router.get("/rides", requireAuth, async (req, res) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/*  Payments (based on Trip.paymentStatus)                                    */
+/*  Payments                                                                  */
 /* -------------------------------------------------------------------------- */
 
 router.get("/payments/summary", requireAuth, async (req, res) => {
@@ -242,12 +240,8 @@ router.get("/payments/summary", requireAuth, async (req, res) => {
   };
 
   const [paidCount, unpaidCount, revenueAgg] = await Promise.all([
-    prisma.trip.count({
-      where: { ...whereBase, paymentStatus: PaymentStatus.PAID },
-    }),
-    prisma.trip.count({
-      where: { ...whereBase, paymentStatus: PaymentStatus.UNPAID },
-    }),
+    prisma.trip.count({ where: { ...whereBase, paymentStatus: PaymentStatus.PAID } }),
+    prisma.trip.count({ where: { ...whereBase, paymentStatus: PaymentStatus.UNPAID } }),
     prisma.trip.aggregate({
       where: { ...whereBase, paymentStatus: PaymentStatus.PAID },
       _sum: { fareCents: true },
@@ -262,46 +256,142 @@ router.get("/payments/summary", requireAuth, async (req, res) => {
       totalRevenue: usdFromCents(totalRevenueCents),
       totalTransactions: paidCount + unpaidCount,
       completedPayments: paidCount,
-      failedPayments: unpaidCount, // best-possible mapping with current schema
+      failedPayments: unpaidCount,
     },
   });
 });
 
-router.get("/payments/revenue-by-month", requireAuth, async (req, res) => {
+/**
+ * ✅ NEW: range-aware revenue chart endpoint
+ * GET /admin/reports/payments/revenue?range=day|week|month|year|all
+ */
+router.get("/payments/revenue", requireAuth, async (req, res) => {
   if (!assertAdmin(req, res)) return;
 
-  const now = new Date();
-  const start = new Date(now);
-  start.setMonth(now.getMonth() - 11);
-  start.setDate(1);
-  start.setHours(0, 0, 0, 0);
+  const range = rangeSchema.parse(req.query.range);
+  const { start, end } = getRange(range);
 
   const trips = await prisma.trip.findMany({
     where: {
       paymentStatus: PaymentStatus.PAID,
-      createdAt: { gte: start, lte: now },
+      ...(start ? { createdAt: { gte: start, lte: end } } : {}),
     },
     select: { createdAt: true, fareCents: true },
   });
 
-  const buckets = new Map<string, number>(); // "Jan" -> cents
+  // Build buckets based on range
+  const now = new Date();
+  const points: Array<{ label: string; value: number }> = [];
+
+  if (range === "day") {
+    // last 24 hours, bucket by hour
+    const buckets = new Map<string, number>();
+    for (let i = 23; i >= 0; i--) {
+      const d = new Date(now);
+      d.setMinutes(0, 0, 0);
+      d.setHours(now.getHours() - i);
+      const label = d.toLocaleTimeString("en-US", { hour: "2-digit" }); // "03 PM"
+      buckets.set(label, 0);
+    }
+    for (const t of trips) {
+      const d = new Date(t.createdAt);
+      d.setMinutes(0, 0, 0);
+      const label = d.toLocaleTimeString("en-US", { hour: "2-digit" });
+      if (buckets.has(label)) buckets.set(label, (buckets.get(label) ?? 0) + (t.fareCents ?? 0));
+    }
+    for (const [label, cents] of buckets.entries()) {
+      points.push({ label, value: Math.round(cents / 100) });
+    }
+    return res.json({ ok: true, points });
+  }
+
+  if (range === "week") {
+    // last 7 days, bucket by day
+    const buckets = new Map<string, number>();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setHours(0, 0, 0, 0);
+      d.setDate(now.getDate() - i);
+      const label = d.toLocaleDateString("en-US", { weekday: "short" }); // "Mon"
+      buckets.set(label, 0);
+    }
+    for (const t of trips) {
+      const d = new Date(t.createdAt);
+      const label = d.toLocaleDateString("en-US", { weekday: "short" });
+      if (buckets.has(label)) buckets.set(label, (buckets.get(label) ?? 0) + (t.fareCents ?? 0));
+    }
+    for (const [label, cents] of buckets.entries()) {
+      points.push({ label, value: Math.round(cents / 100) });
+    }
+    return res.json({ ok: true, points });
+  }
+
+  if (range === "month") {
+    // last 30 days, bucket by date label "Nov 23"
+    const buckets = new Map<string, number>();
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(now);
+      d.setHours(0, 0, 0, 0);
+      d.setDate(now.getDate() - i);
+      const label = formatShortDate(d);
+      buckets.set(label, 0);
+    }
+    for (const t of trips) {
+      const label = formatShortDate(new Date(t.createdAt));
+      if (buckets.has(label)) buckets.set(label, (buckets.get(label) ?? 0) + (t.fareCents ?? 0));
+    }
+    for (const [label, cents] of buckets.entries()) {
+      points.push({ label, value: Math.round(cents / 100) });
+    }
+    return res.json({ ok: true, points });
+  }
+
+  if (range === "year") {
+    // last 12 months bucket by month
+    const buckets = new Map<string, number>();
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(1);
+      d.setHours(0, 0, 0, 0);
+      d.setMonth(now.getMonth() - i);
+      const label = d.toLocaleDateString("en-US", { month: "short" }); // "Jan"
+      buckets.set(label, 0);
+    }
+    for (const t of trips) {
+      const label = new Date(t.createdAt).toLocaleDateString("en-US", { month: "short" });
+      if (buckets.has(label)) buckets.set(label, (buckets.get(label) ?? 0) + (t.fareCents ?? 0));
+    }
+    for (const [label, cents] of buckets.entries()) {
+      points.push({ label, value: Math.round(cents / 100) });
+    }
+    return res.json({ ok: true, points });
+  }
+
+  // all time => bucket by year (last up to 12 years)
+  const minAgg = await prisma.trip.aggregate({
+    where: { paymentStatus: PaymentStatus.PAID },
+    _min: { createdAt: true },
+  });
+
+  const minDate = minAgg._min.createdAt ?? now;
+  const startYear = minDate.getFullYear();
+  const endYear = now.getFullYear();
+
+  const years: number[] = [];
+  for (let y = startYear; y <= endYear; y++) years.push(y);
+  const trimmed = years.length > 12 ? years.slice(years.length - 12) : years;
+
+  const buckets = new Map<string, number>();
+  for (const y of trimmed) buckets.set(String(y), 0);
+
   for (const t of trips) {
-    const label = t.createdAt.toLocaleDateString("en-US", { month: "short" });
-    buckets.set(label, (buckets.get(label) ?? 0) + (t.fareCents ?? 0));
+    const y = String(new Date(t.createdAt).getFullYear());
+    if (buckets.has(y)) buckets.set(y, (buckets.get(y) ?? 0) + (t.fareCents ?? 0));
   }
 
-  // Ensure Jan..Dec order (last 12 months)
-  const labels: string[] = [];
-  for (let i = 11; i >= 0; i--) {
-    const d = new Date(now);
-    d.setMonth(now.getMonth() - i);
-    labels.push(d.toLocaleDateString("en-US", { month: "short" }));
+  for (const [label, cents] of buckets.entries()) {
+    points.push({ label, value: Math.round(cents / 100) });
   }
-
-  const points = labels.map((lab) => ({
-    label: lab,
-    value: Math.round((buckets.get(lab) ?? 0) / 100), // dollars for chart
-  }));
 
   return res.json({ ok: true, points });
 });
@@ -313,8 +403,7 @@ router.get("/payments", requireAuth, async (req, res) => {
   const q = parsed.q.trim();
   const skip = (parsed.page - 1) * parsed.limit;
 
-  const range = parsed.range;
-  const { start, end } = getRange(range);
+  const { start, end } = getRange(parsed.range);
 
   const where: any = {
     ...(start ? { createdAt: { gte: start, lte: end } } : {}),
@@ -341,10 +430,7 @@ router.get("/payments", requireAuth, async (req, res) => {
         fareCents: true,
         paymentStatus: true,
         rider: {
-          select: {
-            fullName: true,
-            riderProfile: { select: { paymentMethod: true } },
-          },
+          select: { fullName: true, riderProfile: { select: { paymentMethod: true } } },
         },
       },
     }),
@@ -355,9 +441,7 @@ router.get("/payments", requireAuth, async (req, res) => {
     rider: t.rider?.fullName ?? "—",
     amount: usdFromCents(t.fareCents),
     date: formatShortDate(t.createdAt),
-    method: t.rider?.riderProfile?.paymentMethod
-      ? String(t.rider.riderProfile.paymentMethod)
-      : "—",
+    method: t.rider?.riderProfile?.paymentMethod ? String(t.rider.riderProfile.paymentMethod) : "—",
     status: t.paymentStatus === PaymentStatus.PAID ? "Completed" : "Failed",
   }));
 
@@ -365,7 +449,7 @@ router.get("/payments", requireAuth, async (req, res) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/*  Payouts (DriverWithdrawalRequest)                                         */
+/*  Payouts                                                                   */
 /* -------------------------------------------------------------------------- */
 
 router.get("/payouts/summary", requireAuth, async (req, res) => {
@@ -378,41 +462,19 @@ router.get("/payouts/summary", requireAuth, async (req, res) => {
     ...(start ? { createdAt: { gte: start, lte: end } } : {}),
   };
 
-  const paidWhere = {
-    ...whereBase,
-    status: WithdrawalStatus.PAID,
-  };
-
-  const pendingWhere = {
-    ...whereBase,
-    status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.PROCESSING] },
-  };
-
+  const paidWhere = { ...whereBase, status: WithdrawalStatus.PAID };
+  const pendingWhere = { ...whereBase, status: { in: [WithdrawalStatus.PENDING, WithdrawalStatus.PROCESSING] } };
   const failedWhere = {
     ...whereBase,
-    status: {
-      in: [
-        WithdrawalStatus.FAILED,
-        WithdrawalStatus.REJECTED,
-        WithdrawalStatus.CANCELLED,
-      ],
-    },
+    status: { in: [WithdrawalStatus.FAILED, WithdrawalStatus.REJECTED, WithdrawalStatus.CANCELLED] },
   };
 
-  const [driversPaidAgg, totalPaidAgg, pendingCount, failedCount] =
-    await Promise.all([
-      prisma.driverWithdrawalRequest.findMany({
-        where: paidWhere,
-        distinct: ["userId"],
-        select: { userId: true },
-      }),
-      prisma.driverWithdrawalRequest.aggregate({
-        where: paidWhere,
-        _sum: { amountCents: true },
-      }),
-      prisma.driverWithdrawalRequest.count({ where: pendingWhere }),
-      prisma.driverWithdrawalRequest.count({ where: failedWhere }),
-    ]);
+  const [driversPaidAgg, totalPaidAgg, pendingCount, failedCount] = await Promise.all([
+    prisma.driverWithdrawalRequest.findMany({ where: paidWhere, distinct: ["userId"], select: { userId: true } }),
+    prisma.driverWithdrawalRequest.aggregate({ where: paidWhere, _sum: { amountCents: true } }),
+    prisma.driverWithdrawalRequest.count({ where: pendingWhere }),
+    prisma.driverWithdrawalRequest.count({ where: failedWhere }),
+  ]);
 
   return res.json({
     ok: true,
@@ -425,12 +487,19 @@ router.get("/payouts/summary", requireAuth, async (req, res) => {
   });
 });
 
-router.get("/payouts/by-driver", requireAuth, async (_req, res) => {
-  // Chart: sum paid amount by driver (last 12 drivers)
-  // (No range for now; easy extension later)
+// ✅ now requireAuth + admin + range-aware
+router.get("/payouts/by-driver", requireAuth, async (req, res) => {
+  if (!assertAdmin(req, res)) return;
+
+  const range = rangeSchema.parse(req.query.range);
+  const { start, end } = getRange(range);
+
   const group = await prisma.driverWithdrawalRequest.groupBy({
     by: ["userId"],
-    where: { status: WithdrawalStatus.PAID },
+    where: {
+      status: WithdrawalStatus.PAID,
+      ...(start ? { createdAt: { gte: start, lte: end } } : {}),
+    },
     _sum: { amountCents: true },
     orderBy: { _sum: { amountCents: "desc" } },
     take: 12,
@@ -441,6 +510,7 @@ router.get("/payouts/by-driver", requireAuth, async (_req, res) => {
     where: { id: { in: ids } },
     select: { id: true, fullName: true },
   });
+
   const map = new Map(users.map((u) => [u.id, u.fullName]));
 
   const points = group.map((g) => ({
@@ -458,8 +528,7 @@ router.get("/payouts", requireAuth, async (req, res) => {
   const q = parsed.q.trim();
   const skip = (parsed.page - 1) * parsed.limit;
 
-  const range = parsed.range;
-  const { start, end } = getRange(range);
+  const { start, end } = getRange(parsed.range);
 
   const where: any = {
     ...(start ? { createdAt: { gte: start, lte: end } } : {}),
@@ -495,7 +564,7 @@ router.get("/payouts", requireAuth, async (req, res) => {
     driver: p.user?.fullName ?? "—",
     amount: usdFromCents(p.amountCents),
     date: formatShortDate(p.createdAt),
-    rides: 0, // schema does not store rides per payout; keep 0 or compute later
+    rides: 0,
     status:
       p.status === WithdrawalStatus.PAID
         ? "Completed"
@@ -511,21 +580,28 @@ router.get("/payouts", requireAuth, async (req, res) => {
 /*  Users                                                                     */
 /* -------------------------------------------------------------------------- */
 
-router.get("/users/summary", requireAuth, async (_req, res) => {
+// ✅ now admin-protected + range-aware
+router.get("/users/summary", requireAuth, async (req, res) => {
+  if (!assertAdmin(req, res)) return;
+
+  const range = rangeSchema.parse(req.query.range);
+  const { start, end } = getRange(range);
+
+  const whereBase: any = {
+    ...(start ? { createdAt: { gte: start, lte: end } } : {}),
+  };
+
   const [riders, drivers] = await Promise.all([
-    prisma.user.count({ where: { role: Role.RIDER } }),
-    prisma.user.count({ where: { role: Role.DRIVER } }),
+    prisma.user.count({ where: { ...whereBase, role: Role.RIDER } }),
+    prisma.user.count({ where: { ...whereBase, role: Role.DRIVER } }),
   ]);
 
-  // Best mapping with existing schema:
-  // rider verified -> riderProfile.otpVerifiedAt not null
-  // driver verified -> driverProfile.onboardingCompletedAt not null
   const [verifiedRiders, verifiedDrivers] = await Promise.all([
     prisma.user.count({
-      where: { role: Role.RIDER, riderProfile: { otpVerifiedAt: { not: null } } },
+      where: { ...whereBase, role: Role.RIDER, riderProfile: { otpVerifiedAt: { not: null } } },
     }),
     prisma.user.count({
-      where: { role: Role.DRIVER, driverProfile: { onboardingCompletedAt: { not: null } } },
+      where: { ...whereBase, role: Role.DRIVER, driverProfile: { onboardingCompletedAt: { not: null } } },
     }),
   ]);
 
@@ -550,8 +626,11 @@ router.get("/users", requireAuth, async (req, res) => {
   const q = parsed.q.trim();
   const skip = (parsed.page - 1) * parsed.limit;
 
+  const { start, end } = getRange(parsed.range);
+
   const where: any = {
     role: { in: [Role.RIDER, Role.DRIVER] },
+    ...(start ? { createdAt: { gte: start, lte: end } } : {}),
     ...(q
       ? {
           OR: [
@@ -580,7 +659,6 @@ router.get("/users", requireAuth, async (req, res) => {
     }),
   ]);
 
-  // last ride: for riders only (cheap + reliable)
   const riderIds = users.filter((u) => u.role === Role.RIDER).map((u) => u.id);
   const lastRides = await prisma.trip.groupBy({
     by: ["riderId"],
@@ -594,11 +672,10 @@ router.get("/users", requireAuth, async (req, res) => {
       (u.role === Role.RIDER && u.riderProfile?.otpVerifiedAt) ||
       (u.role === Role.DRIVER && u.driverProfile?.onboardingCompletedAt);
 
-    const lastRideDate =
-      u.role === Role.RIDER ? lastRideMap.get(u.id) ?? null : null;
+    const lastRideDate = u.role === Role.RIDER ? lastRideMap.get(u.id) ?? null : null;
 
     return {
-      id: u.fullName, // UI column says "User", so show name
+      id: u.fullName,
       type: u.role === Role.DRIVER ? "Driver" : "Rider",
       lastRide: lastRideDate ? formatShortDate(lastRideDate) : "—",
       joined: formatShortDate(u.createdAt),
@@ -622,8 +699,8 @@ router.get("/export", requireAuth, async (req, res) => {
   const { start, end } = getRange(range);
 
   const filename = `occ-${tab}-export.csv`;
-
   let csv = "";
+
   if (tab === "rides") {
     const where: any = {
       ...(start ? { createdAt: { gte: start, lte: end } } : {}),
@@ -686,9 +763,7 @@ router.get("/export", requireAuth, async (req, res) => {
         createdAt: true,
         fareCents: true,
         paymentStatus: true,
-        rider: {
-          select: { fullName: true, riderProfile: { select: { paymentMethod: true } } },
-        },
+        rider: { select: { fullName: true, riderProfile: { select: { paymentMethod: true } } } },
       },
     });
 
@@ -697,9 +772,7 @@ router.get("/export", requireAuth, async (req, res) => {
       Rider: t.rider?.fullName ?? "",
       Amount: usdFromCents(t.fareCents),
       Date: formatShortDate(t.createdAt),
-      Method: t.rider?.riderProfile?.paymentMethod
-        ? String(t.rider.riderProfile.paymentMethod)
-        : "",
+      Method: t.rider?.riderProfile?.paymentMethod ? String(t.rider.riderProfile.paymentMethod) : "",
       Status: t.paymentStatus,
     }));
 
@@ -746,6 +819,7 @@ router.get("/export", requireAuth, async (req, res) => {
   if (tab === "users") {
     const where: any = {
       role: { in: [Role.RIDER, Role.DRIVER] },
+      ...(start ? { createdAt: { gte: start, lte: end } } : {}),
       ...(q
         ? {
             OR: [

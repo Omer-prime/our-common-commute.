@@ -1,10 +1,26 @@
 // src/app/admin/reports/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AdminShell } from "@/src/components/AdminShell";
-import { Search, SlidersHorizontal, MoreHorizontal, ChevronDown } from "lucide-react";
-import Image from "next/image";
+import {
+  Search,
+  SlidersHorizontal,
+  MoreHorizontal,
+  ChevronDown,
+  Car,
+  CheckCircle2,
+  XCircle,
+  Percent,
+  DollarSign,
+  CreditCard,
+  Clock,
+  AlertTriangle,
+  Wallet,
+  Users,
+  UserCheck,
+  BadgeCheck,
+} from "lucide-react";
 import {
   ResponsiveContainer,
   BarChart,
@@ -21,6 +37,7 @@ import {
 /* -------------------------------------------------------------------------- */
 
 type ReportTab = "rides" | "payments" | "payouts" | "users";
+type RangeKey = "day" | "week" | "month" | "year" | "all";
 
 type BarPoint = { label: string; value: number };
 
@@ -54,7 +71,7 @@ type DriverPayoutRow = {
 };
 
 type UserReportRow = {
-  id: string; // displayed as "User" column (we use fullName in backend)
+  id: string; // UI shows this as "User" (backend sends fullName here)
   type: "Rider" | "Driver";
   lastRide: string;
   joined: string;
@@ -62,6 +79,22 @@ type UserReportRow = {
 };
 
 const axisTickStyle = { fontSize: 10, fill: "#94A3B8" };
+
+const RANGE_LABEL: Record<RangeKey, string> = {
+  day: "Daily",
+  week: "Weekly",
+  month: "Monthly",
+  year: "Yearly",
+  all: "All time",
+};
+
+const RANGE_OPTIONS: Array<{ value: RangeKey; label: string }> = [
+  { value: "day", label: "Daily" },
+  { value: "week", label: "Weekly" },
+  { value: "month", label: "Monthly" },
+  { value: "year", label: "Yearly" },
+  { value: "all", label: "All time" },
+];
 
 /* -------------------------------------------------------------------------- */
 /*  API Helpers (401 -> refresh -> retry)                                     */
@@ -76,13 +109,13 @@ function getBackendBaseUrl() {
   );
 }
 
-
 async function refreshAccessToken(): Promise<string | null> {
   const base = getBackendBaseUrl();
   const res = await fetch(`${base}/auth/refresh`, {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
   if (!res.ok) return null;
 
@@ -98,11 +131,14 @@ async function refreshAccessToken(): Promise<string | null> {
 async function apiFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getBackendBaseUrl();
   const token = localStorage.getItem("accessToken") || "";
+
   const doFetch = (tok: string) =>
     fetch(`${base}${path}`, {
       ...init,
       credentials: "include",
+      cache: "no-store",
       headers: {
+        "Cache-Control": "no-store",
         ...(init?.headers || {}),
         ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
       },
@@ -130,7 +166,9 @@ async function apiDownload(path: string): Promise<Blob> {
     fetch(`${base}${path}`, {
       method: "GET",
       credentials: "include",
+      cache: "no-store",
       headers: {
+        "Cache-Control": "no-store",
         ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
       },
     });
@@ -157,11 +195,44 @@ export default function AdminReportsPage() {
   const [activeTab, setActiveTab] = useState<ReportTab>("rides");
   const [searchQuery, setSearchQuery] = useState("");
 
+  // ✅ per-tab range state (each tab remembers selection)
+  const [rangeByTab, setRangeByTab] = useState<Record<ReportTab, RangeKey>>({
+    rides: "month",
+    payments: "month",
+    payouts: "month",
+    users: "all",
+  });
+
+  const activeRange = rangeByTab[activeTab];
+
   // Stats
-  const [rideStats, setRideStats] = useState<{ totalRides: number; completedRides: number; cancelledRides: number; completionRate: number } | null>(null);
-  const [paymentStats, setPaymentStats] = useState<{ totalRevenue: string; totalTransactions: number; completedPayments: number; failedPayments: number } | null>(null);
-  const [payoutStats, setPayoutStats] = useState<{ totalDriversPaid: number; totalPaidAmount: string; pendingPayouts: number; failedPayouts: number } | null>(null);
-  const [userStats, setUserStats] = useState<{ totalRegisteredRiders: number; totalRegisteredDrivers: number; verifiedUsers: number; usersUnderReview: number } | null>(null);
+  const [rideStats, setRideStats] = useState<{
+    totalRides: number;
+    completedRides: number;
+    cancelledRides: number;
+    completionRate: number;
+  } | null>(null);
+
+  const [paymentStats, setPaymentStats] = useState<{
+    totalRevenue: string;
+    totalTransactions: number;
+    completedPayments: number;
+    failedPayments: number;
+  } | null>(null);
+
+  const [payoutStats, setPayoutStats] = useState<{
+    totalDriversPaid: number;
+    totalPaidAmount: string;
+    pendingPayouts: number;
+    failedPayouts: number;
+  } | null>(null);
+
+  const [userStats, setUserStats] = useState<{
+    totalRegisteredRiders: number;
+    totalRegisteredDrivers: number;
+    verifiedUsers: number;
+    usersUnderReview: number;
+  } | null>(null);
 
   // Charts
   const [rideChart, setRideChart] = useState<BarPoint[]>([]);
@@ -177,7 +248,7 @@ export default function AdminReportsPage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Debounce search a bit
+  // Debounce search
   const debouncedQ = useDebounced(searchQuery, 350);
 
   useEffect(() => {
@@ -188,11 +259,15 @@ export default function AdminReportsPage() {
       setErr(null);
 
       try {
+        const range = activeRange;
+
         if (activeTab === "rides") {
           const [sum, chart, list] = await Promise.all([
-            apiFetchJson<{ ok: true; stats: any }>(`/admin/reports/rides/summary?range=month`),
-            apiFetchJson<{ ok: true; points: BarPoint[] }>(`/admin/reports/rides/top-drivers?range=week`),
-            apiFetchJson<{ ok: true; rows: RideReportRow[] }>(`/admin/reports/rides?range=month&q=${encodeURIComponent(debouncedQ)}&page=1&limit=10`),
+            apiFetchJson<{ ok: true; stats: any }>(`/admin/reports/rides/summary?range=${range}`),
+            apiFetchJson<{ ok: true; points: BarPoint[] }>(`/admin/reports/rides/top-drivers?range=${range}`),
+            apiFetchJson<{ ok: true; rows: RideReportRow[] }>(
+              `/admin/reports/rides?range=${range}&q=${encodeURIComponent(debouncedQ)}&page=1&limit=10`
+            ),
           ]);
           if (cancelled) return;
           setRideStats(sum.stats);
@@ -202,9 +277,12 @@ export default function AdminReportsPage() {
 
         if (activeTab === "payments") {
           const [sum, chart, list] = await Promise.all([
-            apiFetchJson<{ ok: true; stats: any }>(`/admin/reports/payments/summary?range=month`),
-            apiFetchJson<{ ok: true; points: BarPoint[] }>(`/admin/reports/payments/revenue-by-month`),
-            apiFetchJson<{ ok: true; rows: PaymentReportRow[] }>(`/admin/reports/payments?range=month&q=${encodeURIComponent(debouncedQ)}&page=1&limit=10`),
+            apiFetchJson<{ ok: true; stats: any }>(`/admin/reports/payments/summary?range=${range}`),
+            // ✅ range-aware endpoint (backend added below)
+            apiFetchJson<{ ok: true; points: BarPoint[] }>(`/admin/reports/payments/revenue?range=${range}`),
+            apiFetchJson<{ ok: true; rows: PaymentReportRow[] }>(
+              `/admin/reports/payments?range=${range}&q=${encodeURIComponent(debouncedQ)}&page=1&limit=10`
+            ),
           ]);
           if (cancelled) return;
           setPaymentStats(sum.stats);
@@ -214,9 +292,12 @@ export default function AdminReportsPage() {
 
         if (activeTab === "payouts") {
           const [sum, chart, list] = await Promise.all([
-            apiFetchJson<{ ok: true; stats: any }>(`/admin/reports/payouts/summary?range=month`),
-            apiFetchJson<{ ok: true; points: BarPoint[] }>(`/admin/reports/payouts/by-driver`),
-            apiFetchJson<{ ok: true; rows: DriverPayoutRow[] }>(`/admin/reports/payouts?range=month&q=${encodeURIComponent(debouncedQ)}&page=1&limit=10`),
+            apiFetchJson<{ ok: true; stats: any }>(`/admin/reports/payouts/summary?range=${range}`),
+            // ✅ now range-aware (backend updated below)
+            apiFetchJson<{ ok: true; points: BarPoint[] }>(`/admin/reports/payouts/by-driver?range=${range}`),
+            apiFetchJson<{ ok: true; rows: DriverPayoutRow[] }>(
+              `/admin/reports/payouts?range=${range}&q=${encodeURIComponent(debouncedQ)}&page=1&limit=10`
+            ),
           ]);
           if (cancelled) return;
           setPayoutStats(sum.stats);
@@ -226,8 +307,10 @@ export default function AdminReportsPage() {
 
         if (activeTab === "users") {
           const [sum, list] = await Promise.all([
-            apiFetchJson<{ ok: true; stats: any }>(`/admin/reports/users/summary`),
-            apiFetchJson<{ ok: true; rows: UserReportRow[] }>(`/admin/reports/users?q=${encodeURIComponent(debouncedQ)}&page=1&limit=10&range=all`),
+            apiFetchJson<{ ok: true; stats: any }>(`/admin/reports/users/summary?range=${range}`),
+            apiFetchJson<{ ok: true; rows: UserReportRow[] }>(
+              `/admin/reports/users?q=${encodeURIComponent(debouncedQ)}&page=1&limit=10&range=${range}`
+            ),
           ]);
           if (cancelled) return;
           setUserStats(sum.stats);
@@ -245,11 +328,13 @@ export default function AdminReportsPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, debouncedQ]);
+  }, [activeTab, debouncedQ, activeRange]);
 
   const handleExport = async () => {
     try {
-      const blob = await apiDownload(`/admin/reports/export?tab=${activeTab}&range=month&q=${encodeURIComponent(searchQuery)}`);
+      const blob = await apiDownload(
+        `/admin/reports/export?tab=${activeTab}&range=${activeRange}&q=${encodeURIComponent(searchQuery)}`
+      );
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -263,14 +348,18 @@ export default function AdminReportsPage() {
     }
   };
 
+  const setActiveRange = (next: RangeKey) => {
+    setRangeByTab((prev) => ({ ...prev, [activeTab]: next }));
+  };
+
   return (
     <AdminShell>
       <div className="flex flex-col gap-6">
-        {/* HEADER: title + search + export */}
+        {/* HEADER */}
         <div className="flex flex-wrap items-center gap-4">
           <h1 className="text-[15px] font-semibold text-slate-900">Reports</h1>
 
-          {/* Search bar */}
+          {/* Search */}
           <div className="relative flex-1 min-w-[220px] max-w-[540px]">
             <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2">
               <Search className="h-4 w-4 text-slate-400" />
@@ -284,8 +373,11 @@ export default function AdminReportsPage() {
             />
           </div>
 
-          {/* Filter + Export */}
+          {/* Range + Filter + Export */}
           <div className="flex items-center gap-2">
+            {/* ✅ clickable dropdown (replaces the confusing non-clickable label) */}
+            <RangeMenu value={activeRange} onChange={setActiveRange} />
+
             <button
               type="button"
               className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100"
@@ -293,6 +385,7 @@ export default function AdminReportsPage() {
             >
               <SlidersHorizontal className="h-4 w-4 text-slate-500" />
             </button>
+
             <button
               type="button"
               onClick={handleExport}
@@ -331,6 +424,8 @@ export default function AdminReportsPage() {
             stats={rideStats}
             chart={rideChart}
             rows={rideRows}
+            range={activeRange}
+            onRangeChange={setActiveRange}
           />
         )}
 
@@ -339,6 +434,8 @@ export default function AdminReportsPage() {
             stats={paymentStats}
             chart={paymentChart}
             rows={paymentRows}
+            range={activeRange}
+            onRangeChange={setActiveRange}
           />
         )}
 
@@ -347,15 +444,12 @@ export default function AdminReportsPage() {
             stats={payoutStats}
             chart={payoutChart}
             rows={payoutRows}
+            range={activeRange}
+            onRangeChange={setActiveRange}
           />
         )}
 
-        {activeTab === "users" && (
-          <UserReportsSection
-            stats={userStats}
-            rows={usersRows}
-          />
-        )}
+        {activeTab === "users" && <UserReportsSection stats={userStats} rows={usersRows} />}
       </div>
     </AdminShell>
   );
@@ -369,33 +463,35 @@ function RideReportsSection({
   stats,
   chart,
   rows,
+  range,
+  onRangeChange,
 }: {
   stats: { totalRides: number; completedRides: number; cancelledRides: number; completionRate: number } | null;
   chart: BarPoint[];
   rows: RideReportRow[];
+  range: RangeKey;
+  onRangeChange: (v: RangeKey) => void;
 }) {
   const highlightIndex = useMemo(() => maxIndex(chart), [chart]);
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <StatCard title="Total rides" value={stats ? String(stats.totalRides) : "—"} trendImage="/Vector (1).png" />
-        <StatCard title="Completed rides" value={stats ? String(stats.completedRides) : "—"} trendImage="/Vector 41.png" />
-        <StatCard title="Cancelled rides" value={stats ? String(stats.cancelledRides) : "—"} trendImage="/Vector (4).png" />
-        <StatCard title="Rides per completion" value={stats ? `${stats.completionRate}%` : "—"} trendImage="/Vector 41 (1).png" />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard title="Total rides" value={stats ? String(stats.totalRides) : "—"} Icon={Car} />
+        <StatCard title="Completed rides" value={stats ? String(stats.completedRides) : "—"} Icon={CheckCircle2} />
+        <StatCard title="Cancelled rides" value={stats ? String(stats.cancelledRides) : "—"} Icon={XCircle} />
+        <StatCard title="Completion rate" value={stats ? `${stats.completionRate}%` : "—"} Icon={Percent} />
       </div>
 
       <section className="rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
         <div className="mb-3 flex items-center justify-between gap-4">
           <div>
             <p className="text-[11px] font-medium text-slate-900">Top rides</p>
-            <p className="mt-1 text-2xl font-semibold text-slate-900">
-              {chart[highlightIndex]?.value ?? 0}
-            </p>
+            <p className="mt-1 text-2xl font-semibold text-slate-900">{chart[highlightIndex]?.value ?? 0}</p>
           </div>
-          <button type="button" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] text-slate-600">
-            This week <ChevronDown className="h-3 w-3" />
-          </button>
+
+          {/* ✅ clickable (this was the non-clickable div before) */}
+          <RangeMenu value={range} onChange={onRangeChange} compact />
         </div>
 
         <ReportsBarChart data={chart} highlightIndex={highlightIndex} />
@@ -412,33 +508,34 @@ function PaymentReportsSection({
   stats,
   chart,
   rows,
+  range,
+  onRangeChange,
 }: {
   stats: { totalRevenue: string; totalTransactions: number; completedPayments: number; failedPayments: number } | null;
   chart: BarPoint[];
   rows: PaymentReportRow[];
+  range: RangeKey;
+  onRangeChange: (v: RangeKey) => void;
 }) {
   const highlightIndex = useMemo(() => maxIndex(chart), [chart]);
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <StatCard title="Total Revenue" value={stats ? stats.totalRevenue : "—"} trendImage="/Vector (1).png" />
-        <StatCard title="Total Transactions" value={stats ? String(stats.totalTransactions) : "—"} trendImage="/Vector 41.png" />
-        <StatCard title="Completed payments" value={stats ? String(stats.completedPayments) : "—"} trendImage="/Vector (4).png" />
-        <StatCard title="Failed payments" value={stats ? String(stats.failedPayments) : "—"} trendImage="/Vector 41 (1).png" />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard title="Total revenue" value={stats ? stats.totalRevenue : "—"} Icon={DollarSign} />
+        <StatCard title="Transactions" value={stats ? String(stats.totalTransactions) : "—"} Icon={CreditCard} />
+        <StatCard title="Completed" value={stats ? String(stats.completedPayments) : "—"} Icon={CheckCircle2} />
+        <StatCard title="Failed" value={stats ? String(stats.failedPayments) : "—"} Icon={XCircle} />
       </div>
 
       <section className="rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
         <div className="mb-3 flex items-center justify-between gap-4">
           <div>
-            <p className="text-[11px] text-slate-400">Total Revenue</p>
-            <p className="mt-1 text-2xl font-semibold text-slate-900">
-              {stats ? stats.totalRevenue : "—"}
-            </p>
+            <p className="text-[11px] text-slate-400">Revenue</p>
+            <p className="mt-1 text-2xl font-semibold text-slate-900">{stats ? stats.totalRevenue : "—"}</p>
           </div>
-          <button type="button" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] text-slate-600">
-            Monthly <ChevronDown className="h-3 w-3" />
-          </button>
+
+          <RangeMenu value={range} onChange={onRangeChange} compact />
         </div>
 
         <ReportsBarChart data={chart} highlightIndex={highlightIndex} />
@@ -455,33 +552,34 @@ function DriverPayoutsSection({
   stats,
   chart,
   rows,
+  range,
+  onRangeChange,
 }: {
   stats: { totalDriversPaid: number; totalPaidAmount: string; pendingPayouts: number; failedPayouts: number } | null;
   chart: BarPoint[];
   rows: DriverPayoutRow[];
+  range: RangeKey;
+  onRangeChange: (v: RangeKey) => void;
 }) {
   const highlightIndex = useMemo(() => maxIndex(chart), [chart]);
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <StatCard title="Total drivers paid" value={stats ? String(stats.totalDriversPaid) : "—"} trendImage="/Vector (1).png" />
-        <StatCard title="Total paid amount" value={stats ? stats.totalPaidAmount : "—"} trendImage="/Vector 41.png" />
-        <StatCard title="Pending payouts" value={stats ? String(stats.pendingPayouts) : "—"} trendImage="/Vector (4).png" />
-        <StatCard title="Failed payouts" value={stats ? String(stats.failedPayouts) : "—"} trendImage="/Vector 41 (1).png" />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard title="Drivers paid" value={stats ? String(stats.totalDriversPaid) : "—"} Icon={Users} />
+        <StatCard title="Total paid" value={stats ? stats.totalPaidAmount : "—"} Icon={Wallet} />
+        <StatCard title="Pending" value={stats ? String(stats.pendingPayouts) : "—"} Icon={Clock} />
+        <StatCard title="Failed" value={stats ? String(stats.failedPayouts) : "—"} Icon={XCircle} />
       </div>
 
       <section className="rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
         <div className="mb-3 flex items-center justify-between gap-4">
           <div>
-            <p className="text-[11px] text-slate-400">Total paid</p>
-            <p className="mt-1 text-2xl font-semibold text-slate-900">
-              {stats ? stats.totalPaidAmount : "—"}
-            </p>
+            <p className="text-[11px] text-slate-400">Paid amount</p>
+            <p className="mt-1 text-2xl font-semibold text-slate-900">{stats ? stats.totalPaidAmount : "—"}</p>
           </div>
-          <button type="button" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] text-slate-600">
-            Monthly <ChevronDown className="h-3 w-3" />
-          </button>
+
+          <RangeMenu value={range} onChange={onRangeChange} compact />
         </div>
 
         <ReportsBarChart data={chart} highlightIndex={highlightIndex} />
@@ -504,10 +602,10 @@ function UserReportsSection({
   return (
     <div className="flex flex-col gap-5">
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard title="Total registered riders" value={stats ? String(stats.totalRegisteredRiders) : "—"} trendImage="/Vector (1).png" />
-        <StatCard title="Total registered driver" value={stats ? String(stats.totalRegisteredDrivers) : "—"} trendImage="/Vector 41.png" />
-        <StatCard title="Verified users" value={stats ? String(stats.verifiedUsers) : "—"} trendImage="/Vector (4).png" />
-        <StatCard title="Users under review" value={stats ? String(stats.usersUnderReview) : "—"} trendImage="/Vector 41 (1).png" />
+        <StatCard title="Registered riders" value={stats ? String(stats.totalRegisteredRiders) : "—"} Icon={Users} />
+        <StatCard title="Registered drivers" value={stats ? String(stats.totalRegisteredDrivers) : "—"} Icon={UserCheck} />
+        <StatCard title="Verified users" value={stats ? String(stats.verifiedUsers) : "—"} Icon={BadgeCheck} />
+        <StatCard title="Under review" value={stats ? String(stats.usersUnderReview) : "—"} Icon={AlertTriangle} />
       </div>
 
       <section className="rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
@@ -538,15 +636,104 @@ function TopTab(props: { label: string; active: boolean; onClick: () => void }) 
   );
 }
 
-function StatCard(props: { title: string; value: string; trendImage: string }) {
-  const { title, value, trendImage } = props;
+/**
+ * ✅ Custom dropdown menu (clickable everywhere)
+ * - fixes your issue where the "Monthly" label was not a button
+ */
+function RangeMenu({
+  value,
+  onChange,
+  compact = false,
+}: {
+  value: RangeKey;
+  onChange: (v: RangeKey) => void;
+  compact?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onDoc = (e: MouseEvent | TouchEvent) => {
+      const el = ref.current;
+      if (!el) return;
+      if (!el.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("touchstart", onDoc);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("touchstart", onDoc);
+    };
+  }, []);
+
+  const btnClass = compact
+    ? "inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] text-slate-600 hover:bg-slate-100"
+    : "inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 hover:bg-slate-100";
+
+  return (
+    <div ref={ref} className="relative z-50 shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={btnClass}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        {RANGE_LABEL[value]}
+        <ChevronDown className={`h-4 w-4 text-slate-400 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 mt-2 w-44 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_18px_40px_rgba(15,23,42,0.12)]"
+        >
+          <div className="p-1">
+            {RANGE_OPTIONS.map((opt) => {
+              const active = opt.value === value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onChange(opt.value);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs ${
+                    active ? "bg-slate-100 text-slate-900" : "text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  <span>{opt.label}</span>
+                  {active ? <span className="text-[10px] text-slate-400">Selected</span> : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatCard({
+  title,
+  value,
+  Icon,
+}: {
+  title: string;
+  value: string;
+  Icon: React.ComponentType<{ className?: string }>;
+}) {
   return (
     <div className="flex items-center justify-between rounded-2xl border border-slate-100 bg-white px-4 py-3.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
       <div>
         <p className="text-[10px] text-slate-400">{title}</p>
         <p className="mt-1 text-sm font-semibold text-slate-900">{value}</p>
       </div>
-      <Image src={trendImage} alt="" width={70} height={32} className="h-8 w-auto" />
+      <div className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-slate-50 text-slate-600">
+        <Icon className="h-5 w-5" />
+      </div>
     </div>
   );
 }
