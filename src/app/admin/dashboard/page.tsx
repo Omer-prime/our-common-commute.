@@ -106,25 +106,27 @@ export default function AdminDashboardPage() {
 
   return (
     <AdminShell>
-      <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-4 sm:gap-6">
         {/* HEADER */}
-        <div className="flex items-center gap-6">
-          <h1 className="text-[15px] font-semibold text-slate-900">Dashboard</h1>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
+          <h1 className="shrink-0 text-[15px] font-semibold text-slate-900">
+            Dashboard
+          </h1>
 
-          <div className="relative flex-1 max-w-[540px]">
+          <div className="relative w-full sm:flex-1 sm:max-w-[540px]">
             <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2">
               <Search className="h-4 w-4 text-slate-400" />
             </span>
             <input
               type="text"
               placeholder="Search"
-              className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-xs text-slate-700 placeholder:text-slate-400 focus:border-[#2563FF] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2563FF]/15"
+              className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-[13px] text-slate-700 placeholder:text-slate-400 focus:border-[#2563FF] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2563FF]/15 sm:h-10 sm:text-xs"
             />
           </div>
         </div>
 
         {/* TOP STATS ROW */}
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
           <StatCard
             title="Total Users"
             value={loading ? "..." : String(stats?.totalUsers ?? 0)}
@@ -159,27 +161,44 @@ export default function AdminDashboardPage() {
         </div>
 
         {/* CHARTS */}
-        <div className="grid gap-4 lg:grid-cols-[2.1fr_1.4fr]">
-          <div className="rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
-            <h2 className="text-[13px] font-semibold text-slate-900">Rides Overview</h2>
+        <div className="grid gap-3 sm:gap-4 lg:grid-cols-[2.1fr_1.4fr]">
+          <div className="rounded-2xl border border-slate-100 bg-white px-4 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)] sm:px-5">
+            <h2 className="text-[13px] font-semibold text-slate-900">
+              Rides Overview
+            </h2>
             <p className="mb-4 text-[11px] text-slate-400">Last 7 days</p>
-            <RidesOverviewChart data={ridesSeries} />
+
+            {/* Helps if chart container ever overflows on very small screens */}
+            <div className="w-full overflow-x-auto">
+              <div className="min-w-[320px]">
+                <RidesOverviewChart data={ridesSeries} />
+              </div>
+            </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
-            <h2 className="text-[13px] font-semibold text-slate-900">Revenue Overview</h2>
+          <div className="rounded-2xl border border-slate-100 bg-white px-4 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)] sm:px-5">
+            <h2 className="text-[13px] font-semibold text-slate-900">
+              Revenue Overview
+            </h2>
             <p className="mb-4 text-[11px] text-slate-400">Last 7 days</p>
-            <RevenueOverviewChart data={revenueSeries} />
+
+            <div className="w-full overflow-x-auto">
+              <div className="min-w-[320px]">
+                <RevenueOverviewChart data={revenueSeries} />
+              </div>
+            </div>
           </div>
         </div>
 
         {/* RECENT ACTIVITIES */}
-        <section className="mt-1 rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-[13px] font-semibold text-slate-900">Recent activities</h2>
+        <section className="mt-1 rounded-2xl border border-slate-100 bg-white px-4 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)] sm:px-5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="text-[13px] font-semibold text-slate-900">
+              Recent activities
+            </h2>
             <button
               onClick={() => load()}
-              className="text-[11px] font-medium text-[#2563FF] hover:underline"
+              className="shrink-0 text-[11px] font-medium text-[#2563FF] hover:underline"
             >
               Refresh
             </button>
@@ -227,14 +246,14 @@ function StatCard({
 }) {
   return (
     <div className="flex items-center justify-between rounded-2xl border border-slate-100 bg-white px-4 py-3.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
-      <div>
+      <div className="min-w-0">
         <p className="text-[10px] text-slate-400">{title}</p>
         <p className="mt-1 text-sm font-semibold text-slate-900">{value}</p>
       </div>
 
       <span
         className={[
-          "inline-flex h-9 w-9 items-center justify-center rounded-full ring-1 ring-slate-200",
+          "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full ring-1 ring-slate-200",
           iconBg,
         ].join(" ")}
       >
@@ -259,12 +278,17 @@ function ActivityRow({
 }) {
   return (
     <div className="flex items-start gap-3">
-      <span className={["mt-1 inline-flex h-7 w-7 items-center justify-center rounded-xl", bgClass].join(" ")}>
+      <span
+        className={[
+          "mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-xl",
+          bgClass,
+        ].join(" ")}
+      >
         <Icon className={["h-4 w-4", iconClass].join(" ")} />
       </span>
 
-      <div>
-        <p>{text}</p>
+      <div className="min-w-0">
+        <p className="break-words">{text}</p>
         <p className="text-[10px] text-slate-400">{timeLabel}</p>
       </div>
     </div>

@@ -1,10 +1,18 @@
 // src/app/admin/settings/page.tsx
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { AdminShell } from "@/src/components/AdminShell";
-import { Search, SlidersHorizontal, ChevronDown, X, Upload } from "lucide-react";
-import Image from "next/image";
+import {
+  Search,
+  SlidersHorizontal,
+  ChevronDown,
+  X,
+  Upload,
+  Users,
+  UserCheck,
+  UserX,
+} from "lucide-react";
 
 /* -------------------------------------------------------------------------- */
 /*  API HELPERS                                                               */
@@ -17,7 +25,6 @@ function getApiBaseUrl() {
 
 function getAuthToken() {
   if (typeof window === "undefined") return "";
-  // adjust these keys if your project uses a different name
   return (
     localStorage.getItem("accessToken") ||
     localStorage.getItem("token") ||
@@ -60,7 +67,6 @@ function formatShortDate(dateIso?: string | null) {
 }
 
 function displayAdminId(id: string) {
-  // UI expects something like "#74658335"
   const tail = id.replace(/[^a-zA-Z0-9]/g, "").slice(-8);
   return `#${tail || id.slice(0, 8)}`;
 }
@@ -72,7 +78,7 @@ function displayAdminId(id: string) {
 type SettingsTab = "admin-management" | "compliance" | "notifications" | "customization";
 
 type AdminRow = {
-  id: string; // display id (e.g. "#xxxx")
+  id: string; // display id
   _id: string; // real id
   name: string;
   role: string;
@@ -138,12 +144,12 @@ export default function AdminSettingsPage() {
 
   return (
     <AdminShell>
-      <div className="flex flex-col gap-6">
-        {/* HEADER: title + search (visual only, not wired) */}
-        <div className="flex items-center gap-6">
+      <div className="flex min-w-0 flex-col gap-6">
+        {/* HEADER: stacks on mobile */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
           <h1 className="text-[15px] font-semibold text-slate-900">Settings</h1>
 
-          <div className="relative flex-1 max-w-[540px]">
+          <div className="relative w-full sm:flex-1 sm:max-w-[540px]">
             <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2">
               <Search className="h-4 w-4 text-slate-400" />
             </span>
@@ -156,9 +162,35 @@ export default function AdminSettingsPage() {
         </div>
 
         {/* MAIN LAYOUT */}
-        <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-          {/* LEFT VERTICAL TABS */}
-          <nav className="rounded-2xl border border-slate-100 bg-white py-3 text-[12px] text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+        <div className="grid min-w-0 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+          {/* MOBILE: grid tabs (no cut/scroll issues) */}
+          <div className="lg:hidden">
+            <div className="grid grid-cols-2 gap-2 rounded-2xl border border-slate-100 bg-white p-2 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+              <MobileTabButton
+                label="Admin management"
+                active={activeTab === "admin-management"}
+                onClick={() => setActiveTab("admin-management")}
+              />
+              <MobileTabButton
+                label="Compliance & security"
+                active={activeTab === "compliance"}
+                onClick={() => setActiveTab("compliance")}
+              />
+              <MobileTabButton
+                label="Notification settings"
+                active={activeTab === "notifications"}
+                onClick={() => setActiveTab("notifications")}
+              />
+              <MobileTabButton
+                label="Customization"
+                active={activeTab === "customization"}
+                onClick={() => setActiveTab("customization")}
+              />
+            </div>
+          </div>
+
+          {/* DESKTOP: left vertical tabs */}
+          <nav className="hidden rounded-2xl border border-slate-100 bg-white py-3 text-[12px] text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] lg:block">
             <VerticalTabButton
               label="Admin management"
               active={activeTab === "admin-management"}
@@ -182,7 +214,7 @@ export default function AdminSettingsPage() {
           </nav>
 
           {/* RIGHT CONTENT */}
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4 lg:col-start-2">
             {activeTab === "admin-management" && (
               <AdminManagementTab
                 refreshKey={adminRefreshKey}
@@ -210,8 +242,25 @@ export default function AdminSettingsPage() {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  VERTICAL TAB BUTTON                                                       */
+/*  TABS                                                                      */
 /* -------------------------------------------------------------------------- */
+
+function MobileTabButton(props: { label: string; active: boolean; onClick: () => void }) {
+  const { label, active, onClick } = props;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-full rounded-xl px-3 py-2 text-[11px] font-medium transition ${
+        active
+          ? "bg-[#2563FF] text-white shadow-[0_6px_16px_rgba(37,99,255,0.35)]"
+          : "bg-slate-50 text-slate-600 hover:bg-slate-100"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
 
 function VerticalTabButton(props: { label: string; active: boolean; onClick: () => void }) {
   const { label, active, onClick } = props;
@@ -301,57 +350,107 @@ function AdminManagementTab(props: { onOpenAddAdmin: () => void; refreshKey: num
   }, [debouncedQ, refreshKey]);
 
   return (
-    <div className="space-y-4">
-      {/* error */}
+    <div className="min-w-0 space-y-4">
       {err && (
         <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-[12px] text-rose-700">
           {err}
         </div>
       )}
 
-      {/* Stats row */}
+      {/* Stats row (icons = real meaning) */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard title="Total admins" value={stats ? String(stats.totalAdmins) : loading ? "…" : "0"} trendImage="/Vector (1).png" />
-        <StatCard title="Active admins" value={stats ? String(stats.activeAdmins) : loading ? "…" : "0"} trendImage="/Vector 41.png" />
-        <StatCard title="Inactive admins" value={stats ? String(stats.inactiveAdmins) : loading ? "…" : "0"} trendImage="/Vector (4).png" />
+        <StatCard title="Total admins" value={stats ? String(stats.totalAdmins) : loading ? "…" : "0"} Icon={Users} />
+        <StatCard title="Active admins" value={stats ? String(stats.activeAdmins) : loading ? "…" : "0"} Icon={UserCheck} />
+        <StatCard title="Inactive admins" value={stats ? String(stats.inactiveAdmins) : loading ? "…" : "0"} Icon={UserX} />
       </div>
 
-      {/* Table card */}
-      <section className="rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
-        {/* search + filter + add button */}
-        <div className="mb-3 flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 min-w-[200px] max-w-xs">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2">
-              <Search className="h-4 w-4 text-slate-400" />
-            </span>
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              type="text"
-              placeholder="Search"
-              className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-[11px] text-slate-700 placeholder:text-slate-400 focus:border-[#2563FF] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2563FF]/15"
-            />
+      {/* Table/Card container */}
+      <section className="min-w-0 rounded-2xl border border-slate-100 bg-white px-4 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)] sm:px-5">
+        {/* search + filter + add button (mobile friendly) */}
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-3">
+            <div className="relative w-full sm:w-[320px]">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2">
+                <Search className="h-4 w-4 text-slate-400" />
+              </span>
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                type="text"
+                placeholder="Search"
+                className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-[11px] text-slate-700 placeholder:text-slate-400 focus:border-[#2563FF] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#2563FF]/15"
+              />
+            </div>
+
+            <button
+              type="button"
+              className="inline-flex h-9 w-full items-center justify-center rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 sm:w-9"
+              title="Filter (UI only)"
+            >
+              <SlidersHorizontal className="h-4 w-4 text-slate-500" />
+            </button>
           </div>
 
           <button
             type="button"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100"
-            title="Filter (UI only)"
-          >
-            <SlidersHorizontal className="h-4 w-4 text-slate-500" />
-          </button>
-
-          <button
-            type="button"
             onClick={onOpenAddAdmin}
-            className="inline-flex items-center justify-center rounded-lg bg-[#2563FF] px-4 py-2 text-[11px] font-semibold text-white hover:bg-[#1d4ed8]"
+            className="inline-flex h-9 w-full items-center justify-center rounded-lg bg-[#2563FF] px-4 text-[11px] font-semibold text-white hover:bg-[#1d4ed8] sm:w-auto"
           >
             Add admin
           </button>
         </div>
 
-        {/* table */}
-        <div className="overflow-x-auto rounded-2xl border border-slate-100">
+        {/* MOBILE: cards */}
+        <div className="space-y-2 sm:hidden">
+          {loading ? (
+            <div className="rounded-xl border border-slate-100 bg-white p-4 text-[11px] text-slate-500">
+              Loading…
+            </div>
+          ) : rows.length === 0 ? (
+            <div className="rounded-xl border border-slate-100 bg-white p-4 text-[11px] text-slate-500">
+              No admins found.
+            </div>
+          ) : (
+            rows.map((row) => (
+              <div key={row._id} className="rounded-2xl border border-slate-100 bg-white p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-[12px] font-semibold text-slate-900">{row.name}</p>
+                    <p className="truncate text-[10px] text-slate-400">{row.email}</p>
+                  </div>
+
+                  <span
+                    className={`shrink-0 inline-flex items-center rounded-full border px-2 py-[3px] text-[10px] font-medium ${
+                      row.status === "Completed"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : "border-amber-200 bg-amber-50 text-amber-700"
+                    }`}
+                  >
+                    {row.status}
+                  </span>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-slate-600">
+                  <div className="rounded-lg bg-slate-50 p-2">
+                    <p className="text-slate-400">Admin ID</p>
+                    <p className="font-medium text-slate-700">{row.id}</p>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-2">
+                    <p className="text-slate-400">Role</p>
+                    <p className="font-medium text-slate-700">{row.role}</p>
+                  </div>
+                  <div className="col-span-2 rounded-lg bg-slate-50 p-2">
+                    <p className="text-slate-400">Last login</p>
+                    <p className="font-medium text-slate-700">{row.lastLogin}</p>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* DESKTOP (sm+): table */}
+        <div className="hidden overflow-x-auto rounded-2xl border border-slate-100 sm:block">
           <table className="min-w-full text-left text-[11px]">
             <thead className="bg-slate-50 text-slate-500">
               <tr>
@@ -500,7 +599,7 @@ function ComplianceSecurityTab() {
   }
 
   return (
-    <section className="rounded-2xl border border-slate-100 bg-white px-5 py-5 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
+    <section className="min-w-0 rounded-2xl border border-slate-100 bg-white px-4 py-5 shadow-[0_10px_30px_rgba(15,23,42,0.04)] sm:px-5">
       <h2 className="text-[13px] font-semibold text-slate-900">Compliances &amp; Security</h2>
 
       {err && (
@@ -579,8 +678,8 @@ function ComplianceSecurityTab() {
         {/* 2FA */}
         <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-4">
           <p className="mb-2 text-[11px] font-semibold text-slate-900">Two-Factor Authentication</p>
-          <div className="flex items-center justify-between text-[11px] text-slate-700">
-            <span>Require 2FA for withdrawal</span>
+          <div className="flex items-center justify-between gap-3 text-[11px] text-slate-700">
+            <span className="min-w-0">Require 2FA for withdrawal</span>
             <ToggleSwitch checked={require2FA} onChange={() => setRequire2FA((v) => !v)} />
           </div>
         </div>
@@ -626,9 +725,7 @@ function NotificationSettingsTab() {
       try {
         setErr("");
         setLoading(true);
-        const res = await apiFetch<{ ok: boolean; notifications: NotificationSettings }>(
-          "/admin/settings/notifications"
-        );
+        const res = await apiFetch<{ ok: boolean; notifications: NotificationSettings }>("/admin/settings/notifications");
         if (!mounted) return;
 
         setAlerts(res.notifications.alerts);
@@ -666,7 +763,7 @@ function NotificationSettingsTab() {
   }
 
   return (
-    <section className="rounded-2xl border border-slate-100 bg-white px-5 py-5 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
+    <section className="min-w-0 rounded-2xl border border-slate-100 bg-white px-4 py-5 shadow-[0_10px_30px_rgba(15,23,42,0.04)] sm:px-5">
       <h2 className="text-[13px] font-semibold text-slate-900">Notification settings</h2>
 
       {err && (
@@ -711,7 +808,7 @@ function NotificationSettingsTab() {
 
         {/* Delivery channels */}
         <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-4">
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-2 flex items-center justify-between gap-3">
             <p className="text-[11px] font-semibold text-slate-900">Delivery channels</p>
             <ToggleSwitch checked={deliveryEnabled} onChange={() => setDeliveryEnabled((v) => !v)} />
           </div>
@@ -751,7 +848,7 @@ function NotificationSettingsTab() {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  CUSTOMIZATION TAB (CONNECTED + LOGO UPLOAD)                                */
+/*  CUSTOMIZATION TAB (CONNECTED + LOGO UPLOAD)                               */
 /* -------------------------------------------------------------------------- */
 
 function CustomizationTab() {
@@ -874,7 +971,7 @@ function CustomizationTab() {
   }
 
   return (
-    <section className="rounded-2xl border border-slate-100 bg-white px-5 py-5 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
+    <section className="min-w-0 rounded-2xl border border-slate-100 bg-white px-4 py-5 shadow-[0_10px_30px_rgba(15,23,42,0.04)] sm:px-5">
       <h2 className="text-[13px] font-semibold text-slate-900">Customization</h2>
 
       {err && (
@@ -927,7 +1024,9 @@ function CustomizationTab() {
               <select
                 disabled={loading || !custom}
                 value={custom?.currency.default || "USD"}
-                onChange={(e) => custom && setCustom({ ...custom, currency: { ...custom.currency, default: e.target.value } })}
+                onChange={(e) =>
+                  custom && setCustom({ ...custom, currency: { ...custom.currency, default: e.target.value } })
+                }
                 className="h-9 w-full appearance-none rounded-lg border border-slate-200 bg-white px-3 pr-9 text-left text-[11px] text-slate-700 focus:border-[#2563FF] focus:outline-none focus:ring-1 focus:ring-[#2563FF]/30"
               >
                 {currencyOptions.map((c) => (
@@ -964,7 +1063,9 @@ function CustomizationTab() {
               <select
                 disabled={loading || !custom}
                 value={custom?.language.default || "English"}
-                onChange={(e) => custom && setCustom({ ...custom, language: { ...custom.language, default: e.target.value } })}
+                onChange={(e) =>
+                  custom && setCustom({ ...custom, language: { ...custom.language, default: e.target.value } })
+                }
                 className="h-9 w-full appearance-none rounded-lg border border-slate-200 bg-white px-3 pr-9 text-left text-[11px] text-slate-700 focus:border-[#2563FF] focus:outline-none focus:ring-1 focus:ring-[#2563FF]/30"
               >
                 {languageOptions.map((l) => (
@@ -1014,15 +1115,21 @@ function CustomizationTab() {
 /*  SMALL COMPONENTS                                                          */
 /* -------------------------------------------------------------------------- */
 
-function StatCard(props: { title: string; value: string; trendImage: string }) {
-  const { title, value, trendImage } = props;
+function StatCard(props: {
+  title: string;
+  value: string;
+  Icon: React.ComponentType<{ className?: string }>;
+}) {
+  const { title, value, Icon } = props;
   return (
     <div className="flex items-center justify-between rounded-2xl border border-slate-100 bg-white px-4 py-3.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
       <div>
         <p className="text-[10px] text-slate-400">{title}</p>
         <p className="mt-1 text-sm font-semibold text-slate-900">{value}</p>
       </div>
-      <Image src={trendImage} alt="" width={70} height={32} className="h-8 w-auto" />
+      <div className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-slate-50 text-slate-600">
+        <Icon className="h-5 w-5" />
+      </div>
     </div>
   );
 }
@@ -1036,6 +1143,7 @@ function ToggleSwitch(props: { checked: boolean; onChange: () => void }) {
       className={`relative inline-flex h-5 w-9 items-center rounded-full border transition ${
         checked ? "border-[#2563FF]/60 bg-[#2563FF]" : "border-slate-300 bg-slate-200"
       }`}
+      aria-pressed={checked}
     >
       <span
         className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
@@ -1049,8 +1157,8 @@ function ToggleSwitch(props: { checked: boolean; onChange: () => void }) {
 function SettingToggleRow(props: { label: string; checked: boolean; onToggle: () => void }) {
   const { label, checked, onToggle } = props;
   return (
-    <div className="flex items-center justify-between">
-      <span>{label}</span>
+    <div className="flex items-center justify-between gap-3">
+      <span className="min-w-0">{label}</span>
       <ToggleSwitch checked={checked} onChange={onToggle} />
     </div>
   );
@@ -1067,7 +1175,7 @@ function RadioRow(props: { label: string; checked: boolean; onClick: () => void 
       >
         {checked && <span className="h-2 w-2 rounded-full bg-[#2563FF]" />}
       </span>
-      <span>{label}</span>
+      <span className="min-w-0">{label}</span>
     </button>
   );
 }

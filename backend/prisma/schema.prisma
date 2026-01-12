@@ -248,6 +248,12 @@ model User {
   riderPaymentOptions   RiderPaymentOption[]
   riderIdentityDocs     RiderIdentityDoc[]
   riderLocationRequests RiderLocationChangeRequest[]
+  @@index([createdAt])
+
+  @@index([paymentStatus, createdAt])
+  @@index([status])
+  @@index([driverId, status])
+  @@index([riderId, status])
 }
 
 model RiderPreferences {
@@ -743,6 +749,8 @@ model Trip {
   @@index([status])
   @@index([driverId, status])
   @@index([riderId, status])
+    @@index([createdAt])
+  @@index([paymentStatus, createdAt])
 }
 
 model TripMessage {

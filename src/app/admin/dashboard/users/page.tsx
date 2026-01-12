@@ -90,7 +90,6 @@ export default function AdminUsersPage() {
       setOverview(ov);
       setList(li);
     } catch (e: any) {
-      // show REAL reason instead of "No users found"
       const msg =
         e?.error ||
         e?.message ||
@@ -100,9 +99,8 @@ export default function AdminUsersPage() {
       setOverview(null);
       setList(null);
 
-      // If unauthorized, push to login (optional)
       if (String(msg).toLowerCase().includes("unauthorized") || e?.status === 401) {
-        // router.push("/admin/login"); // uncomment if you want auto redirect
+        // router.push("/admin/login");
       }
     } finally {
       setLoading(false);
@@ -225,60 +223,68 @@ export default function AdminUsersPage() {
             </div>
           </div>
 
-          <div className="mt-3 overflow-hidden rounded-2xl border border-slate-100">
-            <table className="min-w-full text-left text-[11px]">
-              <thead className="bg-slate-50 text-slate-500">
-                <tr>
-                  <th className="px-4 py-2">
-                    <input type="checkbox" className="h-3.5 w-3.5 rounded border-slate-300" />
-                  </th>
-                  <th className="px-4 py-2 font-medium">User ID</th>
-                  <th className="px-4 py-2 font-medium">Name</th>
-                  <th className="px-4 py-2 font-medium">Role</th>
-                  <th className="px-4 py-2 font-medium">Email address</th>
-                  <th className="px-4 py-2 font-medium">Status</th>
-                  <th className="px-4 py-2 font-medium">Last activity</th>
-                  <th className="px-4 py-2 font-medium text-right">Actions</th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-slate-100 text-[11px] text-slate-700">
-                {!loading && users.length === 0 ? (
+          {/* ✅ MOBILE-FRIENDLY SCROLL WRAPPER */}
+          <div className="mt-3 rounded-2xl border border-slate-100">
+            <div className="w-full overflow-x-auto [ -webkit-overflow-scrolling:touch ]">
+              <table className="min-w-[920px] w-full text-left text-[11px]">
+                <thead className="bg-slate-50 text-slate-500">
                   <tr>
-                    <td colSpan={8} className="px-4 py-6 text-center text-slate-400">
-                      No users found.
-                    </td>
+                    <th className="px-4 py-2">
+                      <input type="checkbox" className="h-3.5 w-3.5 rounded border-slate-300" />
+                    </th>
+                    <th className="px-4 py-2 font-medium whitespace-nowrap">User ID</th>
+                    <th className="px-4 py-2 font-medium whitespace-nowrap">Name</th>
+                    <th className="px-4 py-2 font-medium whitespace-nowrap">Role</th>
+                    <th className="px-4 py-2 font-medium whitespace-nowrap">Email address</th>
+                    <th className="px-4 py-2 font-medium whitespace-nowrap">Status</th>
+                    <th className="px-4 py-2 font-medium whitespace-nowrap">Last activity</th>
+                    <th className="px-4 py-2 font-medium text-right whitespace-nowrap">Actions</th>
                   </tr>
-                ) : (
-                  users.map((u) => (
-                    <tr key={u.id} className="hover:bg-slate-50/60">
-                      <td className="px-4 py-2">
-                        <input type="checkbox" className="h-3.5 w-3.5 rounded border-slate-300" />
-                      </td>
+                </thead>
 
-                      <td className="px-4 py-2 align-middle">#{u.id.slice(0, 8)}</td>
-                      <td className="px-4 py-2 align-middle">{u.fullName}</td>
-                      <td className="px-4 py-2 align-middle">{u.role === "DRIVER" ? "Driver" : "Rider"}</td>
-                      <td className="px-4 py-2 align-middle">{u.email}</td>
-                      <td className="px-4 py-2 align-middle">
-                        <StatusPill status={u.status} />
-                      </td>
-                      <td className="px-4 py-2 align-middle">{fmtDate(u.lastActivity)}</td>
-
-                      <td className="px-4 py-2 align-middle text-right">
-                        <button
-                          type="button"
-                          onClick={() => openDetails(u)}
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-full hover:bg-slate-100"
-                        >
-                          <MoreVertical className="h-4 w-4 text-slate-400" />
-                        </button>
+                <tbody className="divide-y divide-slate-100 text-[11px] text-slate-700">
+                  {!loading && users.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="px-4 py-6 text-center text-slate-400">
+                        No users found.
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : (
+                    users.map((u) => (
+                      <tr key={u.id} className="hover:bg-slate-50/60">
+                        <td className="px-4 py-2">
+                          <input type="checkbox" className="h-3.5 w-3.5 rounded border-slate-300" />
+                        </td>
+
+                        <td className="px-4 py-2 align-middle whitespace-nowrap">#{u.id.slice(0, 8)}</td>
+                        <td className="px-4 py-2 align-middle whitespace-nowrap">{u.fullName}</td>
+                        <td className="px-4 py-2 align-middle whitespace-nowrap">
+                          {u.role === "DRIVER" ? "Driver" : "Rider"}
+                        </td>
+
+                        {/* ✅ Email stays readable; scroll is handled by the table wrapper */}
+                        <td className="px-4 py-2 align-middle whitespace-nowrap">{u.email}</td>
+
+                        <td className="px-4 py-2 align-middle whitespace-nowrap">
+                          <StatusPill status={u.status} />
+                        </td>
+                        <td className="px-4 py-2 align-middle whitespace-nowrap">{fmtDate(u.lastActivity)}</td>
+
+                        <td className="px-4 py-2 align-middle text-right whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => openDetails(u)}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full hover:bg-slate-100"
+                          >
+                            <MoreVertical className="h-4 w-4 text-slate-400" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
