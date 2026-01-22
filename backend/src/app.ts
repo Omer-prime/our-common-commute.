@@ -53,7 +53,7 @@ export function createApp() {
 
   app.use(express.json({ limit: "7mb" }));
   app.use(morgan("dev"));
-
+app.set("trust proxy", 1); // trust first proxy
   const authLimiter = rateLimit({
     windowMs: 60_000,
     max: 30,

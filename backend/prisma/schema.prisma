@@ -219,13 +219,11 @@ model User {
   supportConversations    SupportConversation[] @relation("DriverSupportConversations")
   notifications           UserNotification[]    @relation("UserNotifications")
   sentNotifications       UserNotification[]    @relation("UserNotificationSource")
-  // who sent the notification (rider/admin/system user)
   sentDriverNotifications DriverNotification[]  @relation("DriverNotificationSource")
 
   riderProfile        RiderProfile?
   riderOnboardingOtps RiderOnboardingOtp[]
 
-  // Earnings / Wallet
   driverWallet        DriverWallet?
   payoutMethods       DriverPayoutMethod[]
   earningTransactions DriverEarningTransaction[]
@@ -248,13 +246,10 @@ model User {
   riderPaymentOptions   RiderPaymentOption[]
   riderIdentityDocs     RiderIdentityDoc[]
   riderLocationRequests RiderLocationChangeRequest[]
-  @@index([createdAt])
 
-  @@index([paymentStatus, createdAt])
-  @@index([status])
-  @@index([driverId, status])
-  @@index([riderId, status])
+  @@index([createdAt])
 }
+
 
 model RiderPreferences {
   id String @id @default(cuid())

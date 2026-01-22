@@ -85,7 +85,7 @@ export default function HomePage() {
           {/* HEADING + SUBTITLE */}
           <div className="mt-6 flex flex-col items-center gap-3">
             <h1 className="text-[22px] font-semibold text-slate-900 sm:text-2xl">
-              Earn Rewards Every Mile
+              Drive together. Thrive together
             </h1>
             <p className="max-w-md text-sm leading-relaxed text-slate-500">
               {subtitle}

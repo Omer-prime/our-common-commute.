@@ -8,39 +8,23 @@ export async function sendMail(to: string, subject: string, text: string) {
     console.log("Subject:", subject);
     console.log(text);
     console.log("==========================\n");
-    return;
+    return { ok: true, mode: "console" as const };
   }
 
-  const secure = config.mail.port === 465; // ✅ derived from port (465 = secure, 587 = not secure)
+  try {
+    const transporter = nodemailer.createTransport({
+      host: config.mail.host,
+      port: config.mail.port,
+      secure: config.mail.secure,
+      auth: { user: config.mail.user, pass: config.mail.pass },
+      requireTLS: config.mail.port === 587,
+      tls: { minVersion: "TLSv1.2" },
+    });
 
-  const transporter = nodemailer.createTransport({
-    host: config.mail.host,
-    port: config.mail.port,
-    secure, // ✅ true for 465, false for 587
-    auth: {
-      user: config.mail.user,
-      pass: config.mail.pass,
-    },
-
-    // Helps avoid long hangs + clearer failures
-    connectionTimeout: 15_000,
-    greetingTimeout: 15_000,
-    socketTimeout: 30_000,
-
-    // If using 587, force STARTTLS upgrade
-    requireTLS: !secure,
-
-    tls: {
-      minVersion: "TLSv1.2",
-      // Only if you get cert errors in dev, otherwise keep it true
-      // rejectUnauthorized: false,
-    },
-  });
-
-  await transporter.sendMail({
-    from: config.mail.from,
-    to,
-    subject,
-    text,
-  });
+    await transporter.sendMail({ from: config.mail.from, to, subject, text });
+    return { ok: true, mode: "smtp" as const };
+  } catch (err) {
+    console.error("❌ SMTP send failed:", err);
+    return { ok: false, mode: "smtp" as const };
+  }
 }
