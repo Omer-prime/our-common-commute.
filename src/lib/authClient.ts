@@ -1,8 +1,13 @@
 // src/lib/authClient.ts
 import { apiJson, type ApiFail } from "./api";
-import { getAuth, setAuth, updateAccessToken, clearAuth, type Role, type AuthState } from "./authStorage";
-
-
+import {
+  getAuth,
+  setAuth,
+  updateAccessToken,
+  clearAuth,
+  type Role,
+  type AuthState,
+} from "./authStorage";
 
 type SignupInput = {
   fullName: string;
@@ -14,11 +19,11 @@ type SignupInput = {
 type LoginInput = {
   email: string;
   password: string;
-  role?: Role; // backend supports optional role
+  role?: Role;
 };
 
 type AuthResponse = AuthState & {
-  nextPath?: string; // optional for future
+  nextPath?: string;
 };
 
 export async function signup(input: SignupInput) {
@@ -63,27 +68,46 @@ export async function logout() {
   clearAuth();
 }
 
-export async function authedJson<T>(
-  path: string,
-  opts: RequestInit & { json?: unknown } = {}
-) {
+// ✅ helper: always return plain-object headers (safe for any apiJson implementation)
+function headersToObject(init?: HeadersInit) {
+  const h = new Headers(init || undefined);
+  const obj: Record<string, string> = {};
+  h.forEach((v, k) => (obj[k] = v));
+  return obj;
+}
+
+export async function authedJson<T>(path: string, opts: RequestInit & { json?: unknown } = {}) {
   const auth = getAuth();
   if (!auth?.accessToken) throw new Error("NOT_LOGGED_IN");
 
-  const headers = new Headers(opts.headers);
-  headers.set("Authorization", `Bearer ${auth.accessToken}`);
+  // build headers safely (plain object)
+  const h = new Headers(opts.headers || undefined);
+  h.set("Authorization", `Bearer ${auth.accessToken}`);
+
+  // if using opts.json, ensure content-type exists
+  if (opts.json !== undefined && !h.get("Content-Type")) {
+    h.set("Content-Type", "application/json");
+  }
+
+  const headersObj = headersToObject(h);
 
   try {
-    return await apiJson<T>(path, { ...opts, headers });
+    return await apiJson<T>(path, { ...opts, headers: headersObj });
   } catch (e) {
     const err = e as ApiFail;
 
     // Access expired -> refresh once -> retry once
     if (err.status === 401) {
       const newAccess = await refreshAccessToken();
-      const retryHeaders = new Headers(opts.headers);
-      retryHeaders.set("Authorization", `Bearer ${newAccess}`);
-      return await apiJson<T>(path, { ...opts, headers: retryHeaders });
+
+      const h2 = new Headers(opts.headers || undefined);
+      h2.set("Authorization", `Bearer ${newAccess}`);
+      if (opts.json !== undefined && !h2.get("Content-Type")) {
+        h2.set("Content-Type", "application/json");
+      }
+
+      const retryHeadersObj = headersToObject(h2);
+      return await apiJson<T>(path, { ...opts, headers: retryHeadersObj });
     }
 
     throw e;
@@ -96,15 +120,11 @@ export async function me() {
   }>("/me", { method: "GET" });
 }
 
-// Reset password flow
 export async function forgotPassword(email: string) {
-  return apiJson<{ ok: true; otpId?: string; devOtp?: string }>(
-    "/auth/forgot-password",
-    {
-      method: "POST",
-      json: { email },
-    }
-  );
+  return apiJson<{ ok: true; otpId?: string; devOtp?: string }>("/auth/forgot-password", {
+    method: "POST",
+    json: { email },
+  });
 }
 
 export async function verifyResetOtp(email: string, otp: string) {

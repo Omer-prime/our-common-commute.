@@ -24,13 +24,13 @@ export default function Navbar() {
 
           {/* Center nav */}
           <nav className="hidden items-center gap-12 text-[15px] font-medium text-slate-600 sm:flex">
-            <Link href="#about" className="hover:text-slate-900">
+            <Link href="/about" className="hover:text-slate-900">
               About us
             </Link>
-            <Link href="#support" className="hover:text-slate-900">
+            <Link href="/support" className="hover:text-slate-900">
               Support
             </Link>
-            <Link href="#career" className="hover:text-slate-900">
+            <Link href="/career" className="hover:text-slate-900">
               Career
             </Link>
           </nav>

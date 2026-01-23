@@ -15,7 +15,7 @@ type FareStatus = "ACTIVE" | "INACTIVE";
 type FareRuleRow = {
   id: string;
   createdBy: string;
-  createdAt: string;   // ISO
+  createdAt: string; // ISO
   effectiveAt: string; // ISO
   rideFareCents: number;
   driverPayoutCents: number;
@@ -68,6 +68,24 @@ function isoToDateInput(iso: string) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+/** Try to extract a useful error message from various error shapes. */
+function apiErrorMessage(e: any) {
+  // common shapes: { message }, { error }, { data: { error } }, string
+  const code =
+    e?.data?.error ||
+    e?.error ||
+    e?.response?.data?.error ||
+    e?.response?.error;
+
+  if (code === "INVALID_INPUT") return "Invalid input. Please check fare, payout and date.";
+  if (code === "PAYOUT_EXCEEDS_FARE") return "Driver payout must not exceed ride fare.";
+  if (code === "INVALID_FEE") return "Transaction fee is invalid.";
+  if (code === "unauthorized" || code === "UNAUTHORIZED") return "Unauthorized. Please login again.";
+  if (code === "forbidden" || code === "FORBIDDEN") return "Forbidden. You don't have permission.";
+
+  return e?.message || "Something went wrong.";
+}
+
 /* -------------------------------------------------------------------------- */
 /*  PAGE                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -95,6 +113,7 @@ export default function AdminRideCostPage() {
   const [driverPayoutInput, setDriverPayoutInput] = useState("");
   const [dateInput, setDateInput] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   // edit modal state
   const [editingRule, setEditingRule] = useState<FareRuleRow | null>(null);
@@ -117,7 +136,7 @@ export default function AdminRideCostPage() {
       setOverview(ov);
       setList(li);
     } catch (e: any) {
-      setErr(e?.message || "Failed to load ride cost data.");
+      setErr(apiErrorMessage(e) || "Failed to load ride cost data.");
       setOverview(null);
       setList(null);
     } finally {
@@ -139,6 +158,8 @@ export default function AdminRideCostPage() {
 
   const handleCreateRule = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (creating) return;
+
     setFormError(null);
 
     const rideFareVal = Number.parseFloat(rideFareInput || "0");
@@ -158,14 +179,16 @@ export default function AdminRideCostPage() {
     const driverPayoutCents = Math.round(driverPayoutVal * 100);
 
     try {
+      setCreating(true);
+
       await authedJson(`/admin/ride-cost/rules`, {
         method: "POST",
-        body: JSON.stringify({
+        json: {
           rideFareCents,
           driverPayoutCents,
-          effectiveAt: dateInput, // YYYY-MM-DD ok
+          effectiveAt: dateInput,
           transactionFeeCents: null,
-        }),
+        },
       });
 
       setRideFareInput("");
@@ -174,7 +197,9 @@ export default function AdminRideCostPage() {
 
       await load();
     } catch (e: any) {
-      setFormError(e?.message || "Failed to create fare rule.");
+      setFormError(apiErrorMessage(e) || "Failed to create fare rule.");
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -186,21 +211,21 @@ export default function AdminRideCostPage() {
     transactionFeeCents: number | null;
   }) => {
     try {
-      await authedJson(`/admin/ride-cost/rules/${encodeURIComponent(updated.id)}`, {
+      await authedJson(`/admin/ride-cost/rules/${updated.id}`, {
         method: "PATCH",
-        body: JSON.stringify({
+        json: {
           rideFareCents: updated.rideFareCents,
           driverPayoutCents: updated.driverPayoutCents,
           effectiveAt: updated.effectiveAt,
           transactionFeeCents: updated.transactionFeeCents,
-        }),
+        },
       });
+
 
       setEditingRule(null);
       await load();
     } catch (e: any) {
-      // modal handles error display
-      throw new Error(e?.message || "Failed to update rule.");
+      throw new Error(apiErrorMessage(e) || "Failed to update rule.");
     }
   };
 
@@ -239,30 +264,29 @@ export default function AdminRideCostPage() {
           </div>
         ) : null}
 
-        {/* Top stats row (from backend) */}
+        {/* Top stats row */}
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-  <StatCard
-    title="Total rides"
-    value={loading ? "..." : String(overview?.stats.totalRides ?? 0)}
-    icon={<Car className="h-5 w-5 text-slate-500" />}
-  />
-  <StatCard
-    title="Total Revenues"
-    value={loading ? "..." : money(overview?.stats.totalRevenueCents ?? 0)}
-    icon={<DollarSign className="h-5 w-5 text-slate-500" />}
-  />
-  <StatCard
-    title="Current Price per ride"
-    value={loading ? "..." : money(overview?.stats.currentRideFareCents ?? 0)}
-    icon={<Tag className="h-5 w-5 text-slate-500" />}
-  />
-  <StatCard
-    title="Current Driver Payout"
-    value={loading ? "..." : money(overview?.stats.currentDriverPayoutCents ?? 0)}
-    icon={<Wallet className="h-5 w-5 text-slate-500" />}
-  />
-</div>
-
+          <StatCard
+            title="Total rides"
+            value={loading ? "..." : String(overview?.stats.totalRides ?? 0)}
+            icon={<Car className="h-5 w-5 text-slate-500" />}
+          />
+          <StatCard
+            title="Total Revenues"
+            value={loading ? "..." : money(overview?.stats.totalRevenueCents ?? 0)}
+            icon={<DollarSign className="h-5 w-5 text-slate-500" />}
+          />
+          <StatCard
+            title="Current Price per ride"
+            value={loading ? "..." : money(overview?.stats.currentRideFareCents ?? 0)}
+            icon={<Tag className="h-5 w-5 text-slate-500" />}
+          />
+          <StatCard
+            title="Current Driver Payout"
+            value={loading ? "..." : money(overview?.stats.currentDriverPayoutCents ?? 0)}
+            icon={<Wallet className="h-5 w-5 text-slate-500" />}
+          />
+        </div>
 
         {/* Fare settings card */}
         <section className="space-y-3 rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
@@ -322,9 +346,10 @@ export default function AdminRideCostPage() {
 
             <button
               type="submit"
-              className="h-9 rounded-lg bg-[#2563FF] px-5 text-[11px] font-semibold text-white hover:bg-[#1d4ed8]"
+              disabled={creating}
+              className="h-9 rounded-lg bg-[#2563FF] px-5 text-[11px] font-semibold text-white hover:bg-[#1d4ed8] disabled:opacity-60"
             >
-              Update price
+              {creating ? "Updating..." : "Update price"}
             </button>
           </form>
 
@@ -406,11 +431,7 @@ export default function AdminRideCostPage() {
       </div>
 
       {editingRule && (
-        <EditFareModal
-          rule={editingRule}
-          onClose={() => setEditingRule(null)}
-          onSave={handleSaveRule}
-        />
+        <EditFareModal rule={editingRule} onClose={() => setEditingRule(null)} onSave={handleSaveRule} />
       )}
     </AdminShell>
   );
@@ -466,11 +487,10 @@ function RideCostTable({ rules, onEdit }: { rules: FareRuleRow[]; onEdit: (rule:
             <td className="px-4 py-2 align-middle">{money(rule.driverPayoutCents)}</td>
             <td className="px-4 py-2 align-middle">
               <span
-                className={`inline-flex items-center rounded-full px-2 py-[3px] text-[10px] font-medium ${
-                  rule.status === "ACTIVE"
-                    ? "border border-[#2563FF]/40 bg-[#2563FF]/5 text-[#2563FF]"
-                    : "border border-slate-200 bg-slate-50 text-slate-500"
-                }`}
+                className={`inline-flex items-center rounded-full px-2 py-[3px] text-[10px] font-medium ${rule.status === "ACTIVE"
+                  ? "border border-[#2563FF]/40 bg-[#2563FF]/5 text-[#2563FF]"
+                  : "border border-slate-200 bg-slate-50 text-slate-500"
+                  }`}
               >
                 {rule.status === "ACTIVE" ? "Active" : "Inactive"}
               </span>
@@ -511,15 +531,15 @@ function EditFareModal(props: {
   const [dateEffective, setDateEffective] = useState(() => isoToDateInput(rule.effectiveAt));
 
   const [applyFee, setApplyFee] = useState(!!rule.transactionFeeCents);
-  const [transactionFee, setTransactionFee] = useState(
-    rule.transactionFeeCents ? String(rule.transactionFeeCents / 100) : ""
-  );
+  const [transactionFee, setTransactionFee] = useState(rule.transactionFeeCents ? String(rule.transactionFeeCents / 100) : "");
 
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (saving) return;
+
     setError(null);
 
     const rideVal = Number.parseFloat(rideFare || "0");
@@ -623,14 +643,12 @@ function EditFareModal(props: {
             <button
               type="button"
               onClick={() => setApplyFee((prev) => !prev)}
-              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${
-                applyFee ? "bg-[#22c55e]" : "bg-slate-300"
-              }`}
+              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${applyFee ? "bg-[#22c55e]" : "bg-slate-300"
+                }`}
             >
               <span
-                className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${
-                  applyFee ? "translate-x-3" : "translate-x-0.5"
-                }`}
+                className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${applyFee ? "translate-x-3" : "translate-x-0.5"
+                  }`}
               />
             </button>
           </div>

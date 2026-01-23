@@ -23,14 +23,18 @@ function decodeCursor(cursor: string) {
   return { createdAt: dt, id };
 }
 
-// GET /driver/notifications?limit=20&cursor=...&unreadOnly=1
+// GET /driver/notifications?limit=20&cursor=...&unreadOnly=1  (also supports unread=1)
 router.get("/", requireAuth([Role.DRIVER]), async (req, res) => {
   const userId = req.user!.id;
   const limit = clampLimit(req.query.limit, 1, 50, 20);
-  const unreadOnly = String(req.query.unreadOnly || "") === "1";
+
+  // support both unreadOnly=1 and unread=1 (because frontend uses unread)
+  const unreadOnly =
+    String(req.query.unreadOnly || req.query.unread || "") === "1";
 
   const cursor = typeof req.query.cursor === "string" ? decodeCursor(req.query.cursor) : null;
 
+  // ✅ read from userNotification (same place admin scheduler writes)
   const where: any = { userId };
   if (unreadOnly) where.readAt = null;
 
@@ -42,8 +46,8 @@ router.get("/", requireAuth([Role.DRIVER]), async (req, res) => {
   }
 
   const [unreadCount, rows] = await Promise.all([
-    prisma.driverNotification.count({ where: { userId, readAt: null } }),
-    prisma.driverNotification.findMany({
+    prisma.userNotification.count({ where: { userId, readAt: null } }),
+    prisma.userNotification.findMany({
       where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
@@ -56,6 +60,8 @@ router.get("/", requireAuth([Role.DRIVER]), async (req, res) => {
         data: true,
         readAt: true,
         createdAt: true,
+        // include source user info if your schema has this relation
+        sourceUser: { select: { id: true, fullName: true, role: true } },
       },
     }),
   ]);
@@ -76,7 +82,7 @@ router.patch("/:id/read", requireAuth([Role.DRIVER]), async (req, res) => {
   const userId = req.user!.id;
   const id = req.params.id;
 
-  const updated = await prisma.driverNotification.updateMany({
+  const updated = await prisma.userNotification.updateMany({
     where: { id, userId, readAt: null },
     data: { readAt: new Date() },
   });
@@ -84,17 +90,20 @@ router.patch("/:id/read", requireAuth([Role.DRIVER]), async (req, res) => {
   return res.json({ ok: true, updated: updated.count });
 });
 
-// POST /driver/notifications/read-all
-router.post("/read-all", requireAuth([Role.DRIVER]), async (req, res) => {
+// ✅ PATCH /driver/notifications/read-all  (keep POST too for compatibility)
+async function readAll(req: any, res: any) {
   const userId = req.user!.id;
 
-  const updated = await prisma.driverNotification.updateMany({
+  const updated = await prisma.userNotification.updateMany({
     where: { userId, readAt: null },
     data: { readAt: new Date() },
   });
 
   return res.json({ ok: true, updated: updated.count });
-});
+}
+
+router.patch("/read-all", requireAuth([Role.DRIVER]), readAll);
+router.post("/read-all", requireAuth([Role.DRIVER]), readAll);
 
 export const driverNotificationsRouter = router;
 export default router;

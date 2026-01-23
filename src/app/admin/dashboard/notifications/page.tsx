@@ -134,14 +134,14 @@ export default function AdminNotificationsPage() {
 
     await authedJson(`/admin/notifications`, {
       method: "POST",
-      body: JSON.stringify({
+      json: {
         title: payload.title,
         body: payload.body,
         recipient: payload.recipient,
         channel: payload.channel,
         scheduleEnabled: payload.scheduleEnabled,
         dateTime: isoDate,
-      }),
+      },
     });
 
     setIsCreateOpen(false);
@@ -215,20 +215,18 @@ export default function AdminNotificationsPage() {
               <button
                 type="button"
                 onClick={() => setActiveTab("all")}
-                className={`rounded-md px-4 py-1.5 text-xs font-medium ${
-                  activeTab === "all" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:bg-slate-200/80"
-                }`}
+                className={`rounded-md px-4 py-1.5 text-xs font-medium ${activeTab === "all" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:bg-slate-200/80"
+                  }`}
               >
                 All notifications
               </button>
               <button
                 type="button"
                 onClick={() => setActiveTab("scheduled")}
-                className={`rounded-md px-4 py-1.5 text-xs font-medium ${
-                  activeTab === "scheduled"
+                className={`rounded-md px-4 py-1.5 text-xs font-medium ${activeTab === "scheduled"
                     ? "bg-white text-slate-900 shadow-sm"
                     : "text-slate-500 hover:bg-slate-200/80"
-                }`}
+                  }`}
               >
                 Scheduled
               </button>
@@ -348,11 +346,10 @@ function NotificationsTable({ rows }: { rows: NotificationRow[] }) {
               <td className="px-4 py-2 align-middle">{row.target}</td>
               <td className="px-4 py-2 align-middle">
                 <span
-                  className={`inline-flex items-center rounded-full px-2 py-[3px] text-[10px] font-medium ${
-                    row.status === "Completed"
+                  className={`inline-flex items-center rounded-full px-2 py-[3px] text-[10px] font-medium ${row.status === "Completed"
                       ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
                       : "border border-amber-200 bg-amber-50 text-amber-700"
-                  }`}
+                    }`}
                 >
                   {row.status}
                 </span>
@@ -494,14 +491,12 @@ function CreateNotificationModal(props: {
             <button
               type="button"
               onClick={() => setScheduleEnabled((prev) => !prev)}
-              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${
-                scheduleEnabled ? "bg-[#2563FF]" : "bg-slate-300"
-              }`}
+              className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${scheduleEnabled ? "bg-[#2563FF]" : "bg-slate-300"
+                }`}
             >
               <span
-                className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${
-                  scheduleEnabled ? "translate-x-3" : "translate-x-0.5"
-                }`}
+                className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${scheduleEnabled ? "translate-x-3" : "translate-x-0.5"
+                  }`}
               />
             </button>
             <span className="text-[11px] text-slate-700">Schedule notifications</span>

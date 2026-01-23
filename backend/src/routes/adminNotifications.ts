@@ -9,6 +9,7 @@ import {
   AdminNotificationTarget,
   AdminNotificationChannel,
 } from "@prisma/client";
+import { deliverAdminNotification } from "../services/deliverAdminNotification.js";
 
 const router = Router();
 
@@ -164,5 +165,65 @@ router.get("/", requireAuth([Role.ADMIN]), async (req, res) => {
     rows: mapped,
   });
 });
+ 
+router.post("/", requireAuth([Role.ADMIN]), async (req, res) => {
+  const BodySchema = z.object({
+    title: z.string().min(1),
+    body: z.string().min(1),
+    recipient: z.enum(["Drivers", "Riders", "All users"]),
+    channel: z.enum(["Push", "Email", "SMS"]),
+    scheduleEnabled: z.boolean(),
+    dateTime: z.string().datetime().optional(),
+  });
 
+  const parsed = BodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ ok: false, error: "INVALID_INPUT" });
+  }
+
+  const { title, body, recipient, channel, scheduleEnabled, dateTime } = parsed.data;
+
+  const targetMap = {
+    Drivers: AdminNotificationTarget.DRIVERS,
+    Riders: AdminNotificationTarget.RIDERS,
+    "All users": AdminNotificationTarget.ALL_USERS,
+  } as const;
+
+  const channelMap = {
+    Push: AdminNotificationChannel.PUSH,
+    Email: AdminNotificationChannel.EMAIL,
+    SMS: AdminNotificationChannel.SMS,
+  } as const;
+
+  const scheduledFor =
+    scheduleEnabled && dateTime ? new Date(dateTime) : null;
+
+  const campaign = await prisma.adminNotificationCampaign.create({
+  data: {
+    title,
+    body,
+    target: targetMap[recipient],
+    channel: channelMap[channel],
+    scheduleEnabled,
+    scheduledFor,
+    status: AdminNotificationStatus.PENDING,
+    createdById: req.user!.id,
+  },
+});
+
+// 🔥 IMMEDIATE DELIVERY (only if not scheduled)
+if (!scheduleEnabled) {
+  await deliverAdminNotification(campaign.id);
+}
+
+return res.status(201).json({
+  ok: true,
+  id: campaign.id,
+});
+
+  return res.status(201).json({
+    ok: true,
+    id: campaign.id,
+  });
+});
 export default router;

@@ -1,75 +1,95 @@
-// FAQSection.tsx
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
 import { Button } from "./ui";
 
 const faqs = [
   {
     q: "Do I need to download an app to book a ride?",
-    a: "No. You can book, track, and manage your rides directly from this web experience in under a minute.",
+    a: "No. You can book, track, and manage your rides directly from the web in under a minute.",
   },
   {
     q: "How are drivers vetted?",
-    a: "Every driver passes identity verification, vehicle checks, and ongoing quality reviews before driving on Our Common Commute.",
+    a: "Drivers go through identity verification, license checks, vehicle review, and ongoing quality monitoring.",
   },
   {
     q: "Can I use the same account as a rider and a driver?",
-    a: "Yes. You can switch between rider and driver dashboards with one account once your driver profile is approved.",
+    a: "Yes. Once your driver profile is approved, you can switch between rider and driver modes using one account.",
   },
   {
     q: "How do payouts work for drivers?",
-    a: "Earnings are tracked in real-time in your dashboard and paid out on a regular schedule to your connected payout method.",
+    a: "Earnings are tracked in real time and paid out on a regular schedule to your connected payout method.",
   },
   {
     q: "Is support available if there’s an issue with a trip?",
-    a: "Absolutely. Our support team is available around the clock to help resolve trip issues and safety concerns.",
+    a: "Yes. Our support team is available to help with trip issues, payments, and safety concerns.",
   },
 ];
 
 export default function FAQSection() {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+
   return (
     <section
       id="support"
-      className="bg-gradient-to-b from-[#eaf1ff] via-[#e5efff] to-[#f5f8ff] py-16 scroll-mt-24 sm:py-20"
+      className="bg-gradient-to-b from-[#eaf1ff] via-[#e5efff] to-[#f5f8ff] py-16 sm:py-20"
     >
       <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
         {/* Heading */}
-        <header className="mb-10 text-center sm:mb-12">
-          <h2 className="text-[26px] font-bold tracking-tight text-slate-900 sm:text-[52px]">
-            Got Questions? We&apos;ve Got Answers
+        <header className="mb-10 text-center">
+          <h2 className="text-3xl font-bold text-slate-900 sm:text-5xl">
+            Got Questions? We’ve Got Answers
           </h2>
-          <p className="mx-auto mt-3 max-w-2xl text-[15px] leading-relaxed text-slate-600">
-            Whether you&apos;re booking your first ride or exploring our web app
-            features, our FAQs cover everything you need to ride with confidence.
+          <p className="mx-auto mt-3 max-w-2xl text-sm text-slate-600">
+            Everything you need to know before riding or driving with OCC.
           </p>
         </header>
 
-        {/* FAQ rows – Figma-style pills */}
-        <div className="space-y-3 sm:space-y-4">
-          {faqs.map((item) => (
-            <div
-              key={item.q}
-              className="flex items-center justify-between rounded-xl bg-white px-4 py-3 text-left 
-                         text-[14px] font-medium text-slate-900 shadow-[0_14px_40px_rgba(15,23,42,0.06)]
-                         ring-1 ring-slate-200/70 sm:px-5 sm:py-4"
-            >
-              <span className="pr-4">{item.q}</span>
+        {/* FAQ items */}
+        <div className="space-y-3">
+          {faqs.map((item, i) => {
+            const open = openIndex === i;
 
-              {/* plus icon badge on the right */}
-              <span
-                className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center 
-                           rounded-full bg-[#0B63F4] text-xs font-bold text-white 
-                           shadow-[0_10px_22px_rgba(37,99,235,0.45)]"
+            return (
+              <div
+                key={item.q}
+                className="rounded-xl bg-white shadow-sm ring-1 ring-slate-200"
               >
-                +
-              </span>
-            </div>
-          ))}
+                <button
+                  onClick={() => setOpenIndex(open ? null : i)}
+                  className="flex w-full items-center justify-between px-5 py-4 text-left"
+                >
+                  <span className="text-sm font-medium text-slate-900">
+                    {item.q}
+                  </span>
+
+                  <span
+                    className={`flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 text-white text-xs font-bold transition-transform ${
+                      open ? "rotate-45" : ""
+                    }`}
+                  >
+                    +
+                  </span>
+                </button>
+
+                {open && (
+                  <div className="px-5 pb-4 text-sm leading-relaxed text-slate-600">
+                    {item.a}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
 
-        {/* See more button */}
+        {/* See more */}
         <div className="mt-8 flex justify-center">
-          <Button className="h-11 min-w-[160px] rounded-full px-8 text-[14px]">
-            See more
-          </Button>
+          <Link href="/faqs">
+            <Button className="h-11 min-w-[160px] rounded-full px-8 text-sm">
+              See more FAQs
+            </Button>
+          </Link>
         </div>
       </div>
     </section>

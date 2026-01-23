@@ -25,25 +25,26 @@ import riderMyRidesRouter from "./routes/riderMyRides.js";
 import riderPaymentsRouter from "./routes/riderPayments.js";
 import riderSupportRouter from "./routes/riderSupport.js";
 import riderNotificationsRouter from "./routes/riderNotifications.js";
+import riderProfileRouter from "./routes/riderProfile.js";
 
 import adminNotificationsRouter from "./routes/adminNotifications.js";
 import { adminDashboardRouter } from "./routes/adminDashboard.js";
 import adminUsersRouter from "./routes/adminUsers.js";
 import adminPaymentsRouter from "./routes/adminPayments.js";
 import adminRideCostRoutes from "./routes/adminRideCost.js";
-import  adminContentRouter  from "./routes/adminContent.js";
+import adminContentRouter from "./routes/adminContent.js";
 import adminReportsRouter from "./routes/adminReports.js";
 import adminSettingsRouter from "./routes/adminSettings.js";
-import riderProfileRouter from "./routes/riderProfile.js";
+
 import publicContentRouter from "./routes/publicContent.js";
-
-
-
 
 import { startAdminNotificationScheduler } from "./lib/adminNotificationScheduler.js";
 
 export function createApp() {
   const app = express();
+
+  // ✅ trust proxy early (important for rate-limit + X-Forwarded-For)
+  app.set("trust proxy", 1);
 
   app.use(
     helmet({
@@ -51,13 +52,11 @@ export function createApp() {
     })
   );
 
+  // ✅ body parsers (must be before routes)
   app.use(express.json({ limit: "7mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "7mb" }));
+
   app.use(morgan("dev"));
-app.set("trust proxy", 1); // trust first proxy
-  const authLimiter = rateLimit({
-    windowMs: 60_000,
-    max: 30,
-  });
 
   const allowed = (config.corsOrigin ?? "")
     .split(",")
@@ -67,13 +66,18 @@ app.set("trust proxy", 1); // trust first proxy
   app.use(
     cors({
       origin: (origin, cb) => {
-        if (!origin) return cb(null, true); // postman/curl
+        if (!origin) return cb(null, true); // curl/postman
         if (allowed.includes("*")) return cb(null, true);
         return allowed.includes(origin) ? cb(null, true) : cb(new Error("CORS_BLOCKED"));
       },
       credentials: true,
     })
   );
+
+  const authLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 30,
+  });
 
   // static
   app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
@@ -94,21 +98,22 @@ app.set("trust proxy", 1); // trust first proxy
   app.use("/api/rider/payments", riderPaymentsRouter);
   app.use("/api/rider/support", riderSupportRouter);
   app.use("/api/rider", riderNotificationsRouter);
-app.use("/api/rider/profile", riderProfileRouter);
+  app.use("/api/rider/profile", riderProfileRouter);
+
   // admin
- app.use("/admin/notifications", adminNotificationsRouter);
+  app.use("/admin/notifications", adminNotificationsRouter);
   app.use("/admin/dashboard", adminDashboardRouter);
   app.use("/admin/users", adminUsersRouter);
   app.use("/admin/payments", adminPaymentsRouter);
   app.use("/admin/ride-cost", adminRideCostRoutes);
-   app.use("/admin/content", adminContentRouter);
-   app.use("/admin/reports", adminReportsRouter);
-   app.use("/admin/settings", adminSettingsRouter);
+  app.use("/admin/content", adminContentRouter);
+  app.use("/admin/reports", adminReportsRouter);
+  app.use("/admin/settings", adminSettingsRouter);
 
   // public site content
   app.use("/public/content", publicContentRouter);
 
-  // ✅ start scheduler (no local function with same name anymore)
+  // scheduler
   startAdminNotificationScheduler();
 
   // core routes

@@ -431,6 +431,7 @@ model CmsFaq {
 
   updatedById String?
   updatedBy   User?   @relation("CmsFaqUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  publishedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -446,6 +447,7 @@ model CmsArticle {
   category String
 
   status CmsPublishStatus @default(DRAFT)
+  publishedAt DateTime?
 
   createdById String
   createdBy   User   @relation("CmsArticleCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
@@ -488,6 +490,7 @@ model CmsGuideline {
   sectionTitle String
   content      String
   notes        String?
+  publishedAt DateTime?
 
   status CmsPublishStatus @default(DRAFT)
 
