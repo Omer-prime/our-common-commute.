@@ -1,7 +1,7 @@
 // src/app/admin/dashboard/content/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState, FormEvent } from "react";
+import { useEffect, useMemo, useState, FormEvent, useCallback } from "react";
 import { AdminShell } from "@/src/components/AdminShell";
 import { Search, X, MoreHorizontal } from "lucide-react";
 
@@ -16,7 +16,7 @@ type FAQItem = { id: string; title: string; category: string; status: PublishSta
 type ArticleItem = { id: string; title: string; category: string; status: PublishStatus; lastUpdated: string };
 
 type VersionedDocItem = {
-  id: string; // cuid (we show version in UI)
+  id: string; // cuid
   version: string;
   updatedBy: string;
   date: string;
@@ -47,21 +47,46 @@ function getBackendBaseUrl() {
 async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getBackendBaseUrl();
 
+  const getAccessToken = () =>
+    typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
+
+  const getRefreshToken = () =>
+    typeof window !== "undefined" ? localStorage.getItem("refreshToken") : null;
+
   const doFetch = () =>
     fetch(`${base}${path}`, {
       ...init,
       credentials: "include",
       headers: {
         "Content-Type": "application/json",
+        ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
         ...(init?.headers || {}),
       },
     });
 
   let res = await doFetch();
 
-  // If your backend uses refresh-cookie flow, retry once
   if (res.status === 401) {
-    await fetch(`${base}/auth/refresh`, { method: "POST", credentials: "include" });
+    const refreshToken = getRefreshToken();
+
+    const refreshRes = await fetch(`${base}/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+      signal: init?.signal,
+      headers: { "Content-Type": "application/json" },
+      body: refreshToken ? JSON.stringify({ refreshToken }) : undefined,
+    });
+
+    if (!refreshRes.ok) {
+      const t = await refreshRes.text().catch(() => "");
+      throw new Error(`REFRESH_FAILED ${refreshRes.status}: ${t}`);
+    }
+
+    // If your refresh API returns new tokens, store them (safe no-op if it doesn't)
+    const data: any = await refreshRes.json().catch(() => ({}));
+    if (data?.accessToken) localStorage.setItem("accessToken", data.accessToken);
+    if (data?.refreshToken) localStorage.setItem("refreshToken", data.refreshToken);
+
     res = await doFetch();
   }
 
@@ -85,6 +110,12 @@ function fmtShort(d: string | Date) {
   return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" }); // "Nov 12"
 }
 
+function toStatusQueryParam(statusFilter: "all" | "published" | "draft") {
+  // Many backends expect "PUBLISHED/DRAFT" instead of lowercase.
+  if (statusFilter === "all") return "all";
+  return statusFilter.toUpperCase(); // "PUBLISHED" | "DRAFT"
+}
+
 /* -------------------------------------------------------------------------- */
 /*  PAGE                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -98,6 +129,11 @@ export default function AdminContentManagementPage() {
   const [searchQuery, setSearchQuery] = useState("");
 
   const [loading, setLoading] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
+
+  // IMPORTANT: we need a real reload trigger after save.
+  // setSearchQuery((s)=>s) does NOT re-run effects because state doesn't change.
+  const [reloadTick, setReloadTick] = useState(0);
 
   const [faqs, setFaqs] = useState<FAQItem[]>([]);
   const [articles, setArticles] = useState<ArticleItem[]>([]);
@@ -121,27 +157,30 @@ export default function AdminContentManagementPage() {
   const showCategoryFilter = activeTab === "faqs" || activeTab === "help";
 
   const queryKey = useMemo(
-    () => `${activeTab}|${categoryFilter}|${statusFilter}|${dateFilter}|${searchQuery}`,
-    [activeTab, categoryFilter, statusFilter, dateFilter, searchQuery]
+    () => `${activeTab}|${categoryFilter}|${statusFilter}|${dateFilter}|${searchQuery}|${reloadTick}`,
+    [activeTab, categoryFilter, statusFilter, dateFilter, searchQuery, reloadTick]
   );
 
   useEffect(() => {
-    let cancelled = false;
+    const ctrl = new AbortController();
 
     async function load() {
       setLoading(true);
+      setPageError(null);
+
       try {
         const q = encodeURIComponent(searchQuery.trim());
-        const status = statusFilter;
+        const statusParam = encodeURIComponent(toStatusQueryParam(statusFilter));
         const category = encodeURIComponent(categoryFilter);
 
         if (activeTab === "faqs") {
           const data = await apiJson<{
             ok: true;
             items: { id: string; question: string; category: string; status: ApiCmsStatus; updatedAt: string }[];
-          }>(`/admin/content/faqs?q=${q}&status=${status}&category=${category}&page=1&limit=50`);
+          }>(`/admin/content/faqs?q=${q}&status=${statusParam}&category=${category}&page=1&limit=50`, {
+            signal: ctrl.signal,
+          });
 
-          if (cancelled) return;
           setFaqs(
             data.items.map((x) => ({
               id: x.id,
@@ -157,9 +196,10 @@ export default function AdminContentManagementPage() {
           const data = await apiJson<{
             ok: true;
             items: { id: string; title: string; category: string; status: ApiCmsStatus; updatedAt: string }[];
-          }>(`/admin/content/articles?q=${q}&status=${status}&category=${category}&page=1&limit=50`);
+          }>(`/admin/content/articles?q=${q}&status=${statusParam}&category=${category}&page=1&limit=50`, {
+            signal: ctrl.signal,
+          });
 
-          if (cancelled) return;
           setArticles(
             data.items.map((x) => ({
               id: x.id,
@@ -174,10 +214,19 @@ export default function AdminContentManagementPage() {
         if (activeTab === "terms") {
           const data = await apiJson<{
             ok: true;
-            items: { id: string; version: string; notes: string | null; content: string; status: ApiCmsStatus; updatedAt: string; updatedBy: { fullName: string } }[];
-          }>(`/admin/content/docs?type=TERMS&q=${q}&status=${status}&page=1&limit=50`);
+            items: {
+              id: string;
+              version: string;
+              notes: string | null;
+              content: string;
+              status: ApiCmsStatus;
+              updatedAt: string;
+              updatedBy: { fullName: string } | null;
+            }[];
+          }>(`/admin/content/docs?type=TERMS&q=${q}&status=${statusParam}&page=1&limit=50`, {
+            signal: ctrl.signal,
+          });
 
-          if (cancelled) return;
           setTerms(
             data.items.map((x) => ({
               id: x.id,
@@ -194,10 +243,19 @@ export default function AdminContentManagementPage() {
         if (activeTab === "policy") {
           const data = await apiJson<{
             ok: true;
-            items: { id: string; version: string; notes: string | null; content: string; status: ApiCmsStatus; updatedAt: string; updatedBy: { fullName: string } }[];
-          }>(`/admin/content/docs?type=POLICY&q=${q}&status=${status}&page=1&limit=50`);
+            items: {
+              id: string;
+              version: string;
+              notes: string | null;
+              content: string;
+              status: ApiCmsStatus;
+              updatedAt: string;
+              updatedBy: { fullName: string } | null;
+            }[];
+          }>(`/admin/content/docs?type=POLICY&q=${q}&status=${statusParam}&page=1&limit=50`, {
+            signal: ctrl.signal,
+          });
 
-          if (cancelled) return;
           setPolicies(
             data.items.map((x) => ({
               id: x.id,
@@ -215,9 +273,10 @@ export default function AdminContentManagementPage() {
           const data = await apiJson<{
             ok: true;
             items: { id: string; sectionTitle: string; notes: string | null; status: ApiCmsStatus; updatedAt: string }[];
-          }>(`/admin/content/guidelines?audience=DRIVER&q=${q}&status=${status}&page=1&limit=50`);
+          }>(`/admin/content/guidelines?audience=DRIVER&q=${q}&status=${statusParam}&page=1&limit=50`, {
+            signal: ctrl.signal,
+          });
 
-          if (cancelled) return;
           setDriverGuidelines(
             data.items.map((x) => ({
               id: x.id,
@@ -225,7 +284,7 @@ export default function AdminContentManagementPage() {
               lastUpdated: fmtShort(x.updatedAt),
               notes: x.notes ?? "",
               status: fromApiStatus(x.status),
-              content: "", // loaded on edit if needed
+              content: "", // loaded on edit
             }))
           );
         }
@@ -234,9 +293,10 @@ export default function AdminContentManagementPage() {
           const data = await apiJson<{
             ok: true;
             items: { id: string; sectionTitle: string; notes: string | null; status: ApiCmsStatus; updatedAt: string }[];
-          }>(`/admin/content/guidelines?audience=RIDER&q=${q}&status=${status}&page=1&limit=50`);
+          }>(`/admin/content/guidelines?audience=RIDER&q=${q}&status=${statusParam}&page=1&limit=50`, {
+            signal: ctrl.signal,
+          });
 
-          if (cancelled) return;
           setRiderGuidelines(
             data.items.map((x) => ({
               id: x.id,
@@ -244,20 +304,23 @@ export default function AdminContentManagementPage() {
               lastUpdated: fmtShort(x.updatedAt),
               notes: x.notes ?? "",
               status: fromApiStatus(x.status),
-              content: "",
+              content: "", // loaded on edit
             }))
           );
         }
+      } catch (err: any) {
+        if (err?.name === "AbortError") return;
+        setPageError(err?.message || "Something went wrong while loading content.");
       } finally {
-        if (!cancelled) setLoading(false);
+        setLoading(false);
       }
     }
 
     load();
-    return () => {
-      cancelled = true;
-    };
+    return () => ctrl.abort();
   }, [queryKey]);
+
+  const bumpReload = useCallback(() => setReloadTick((t) => t + 1), []);
 
   async function saveFaq(payload: { id?: string; question: string; answer: string; category: string; status: PublishStatus }) {
     if (payload.id) {
@@ -281,8 +344,7 @@ export default function AdminContentManagementPage() {
         }),
       });
     }
-    // reload current tab
-    setSearchQuery((s) => s);
+    bumpReload();
   }
 
   async function saveArticle(payload: { id?: string; title: string; content: string; category: string; status: PublishStatus }) {
@@ -307,7 +369,7 @@ export default function AdminContentManagementPage() {
         }),
       });
     }
-    setSearchQuery((s) => s);
+    bumpReload();
   }
 
   async function saveDoc(payload: { id?: string; type: "TERMS" | "POLICY"; version: string; notes: string; content: string; status: PublishStatus }) {
@@ -334,7 +396,7 @@ export default function AdminContentManagementPage() {
         }),
       });
     }
-    setSearchQuery((s) => s);
+    bumpReload();
   }
 
   async function saveGuideline(payload: {
@@ -358,8 +420,73 @@ export default function AdminContentManagementPage() {
     } else {
       await apiJson(`/admin/content/guidelines`, { method: "POST", body: JSON.stringify(body) });
     }
-    setSearchQuery((s) => s);
+    bumpReload();
   }
+
+  // Load full record before opening edit modal (otherwise answer/content stays empty).
+  const openFaqEditor = useCallback(async (item: FAQItem) => {
+    try {
+      const data = await apiJson<{
+        ok: true;
+        item: { id: string; question: string; answer: string; category: string; status: ApiCmsStatus; updatedAt: string };
+      }>(`/admin/content/faqs/${item.id}`);
+
+      setEditingFaq({
+        id: data.item.id,
+        title: data.item.question,
+        category: data.item.category,
+        status: fromApiStatus(data.item.status),
+        lastUpdated: fmtShort(data.item.updatedAt),
+        answer: data.item.answer,
+      });
+    } catch {
+      // fallback: open with what we have
+      setEditingFaq({ ...item });
+    }
+  }, []);
+
+  const openArticleEditor = useCallback(async (item: ArticleItem) => {
+    try {
+      const data = await apiJson<{
+        ok: true;
+        item: { id: string; title: string; content: string; category: string; status: ApiCmsStatus; updatedAt: string };
+      }>(`/admin/content/articles/${item.id}`);
+
+      setEditingArticle({
+        id: data.item.id,
+        title: data.item.title,
+        category: data.item.category,
+        status: fromApiStatus(data.item.status),
+        lastUpdated: fmtShort(data.item.updatedAt),
+        content: data.item.content,
+      });
+    } catch {
+      setEditingArticle({ ...item });
+    }
+  }, []);
+
+  const openGuidelineEditor = useCallback(async (audience: "DRIVER" | "RIDER", item: GuidelineItem) => {
+    try {
+      const data = await apiJson<{
+        ok: true;
+        item: { id: string; sectionTitle: string; notes: string | null; content: string; status: ApiCmsStatus; updatedAt: string };
+      }>(`/admin/content/guidelines/${item.id}`);
+
+      setEditingGuideline({
+        audience,
+        item: {
+          id: data.item.id,
+          sectionTitle: data.item.sectionTitle,
+          lastUpdated: fmtShort(data.item.updatedAt),
+          notes: data.item.notes ?? "",
+          status: fromApiStatus(data.item.status),
+          content: data.item.content ?? "",
+        },
+      });
+    } catch {
+      setEditingGuideline({ audience, item });
+    }
+  }, []);
 
   return (
     <AdminShell>
@@ -483,49 +610,39 @@ export default function AdminContentManagementPage() {
             )}
           </div>
 
+          {pageError && (
+            <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-[11px] text-rose-700">
+              {pageError}
+            </div>
+          )}
+
           {loading && <div className="py-6 text-center text-xs text-slate-500">Loading...</div>}
 
           {!loading && (
             <div className="overflow-x-auto rounded-2xl border border-slate-100">
-              {activeTab === "faqs" && (
-                <FaqTable
-                  items={faqs}
-                  onRowAction={(item) => setEditingFaq({ ...item })}
-                />
-              )}
+              {activeTab === "faqs" && <FaqTable items={faqs} onRowAction={openFaqEditor} />}
 
-              {activeTab === "help" && (
-                <ArticlesTable
-                  items={articles}
-                  onRowAction={(item) => setEditingArticle({ ...item })}
-                />
-              )}
+              {activeTab === "help" && <ArticlesTable items={articles} onRowAction={openArticleEditor} />}
 
               {activeTab === "terms" && (
-                <VersionedTable
-                  items={terms}
-                  onRowAction={(item) => setEditingDoc({ type: "TERMS", item })}
-                />
+                <VersionedTable items={terms} onRowAction={(item) => setEditingDoc({ type: "TERMS", item })} />
               )}
 
               {activeTab === "policy" && (
-                <VersionedTable
-                  items={policies}
-                  onRowAction={(item) => setEditingDoc({ type: "POLICY", item })}
-                />
+                <VersionedTable items={policies} onRowAction={(item) => setEditingDoc({ type: "POLICY", item })} />
               )}
 
               {activeTab === "driver" && (
                 <GuidelinesTable
                   items={driverGuidelines}
-                  onRowAction={(item) => setEditingGuideline({ audience: "DRIVER", item })}
+                  onRowAction={(item) => openGuidelineEditor("DRIVER", item)}
                 />
               )}
 
               {activeTab === "rider" && (
                 <GuidelinesTable
                   items={riderGuidelines}
-                  onRowAction={(item) => setEditingGuideline({ audience: "RIDER", item })}
+                  onRowAction={(item) => openGuidelineEditor("RIDER", item)}
                 />
               )}
             </div>
@@ -800,25 +917,30 @@ function AddFaqModal(props: {
   const [answer, setAnswer] = useState(initial?.answer ?? "");
   const [status, setStatus] = useState<PublishStatus>(initial?.status ?? "Draft");
 
+  const [saving, setSaving] = useState(false);
+
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    await onSave({
-      id: initial?.id || undefined,
-      question,
-      answer,
-      category,
-      status,
-    });
-    onClose();
+    setSaving(true);
+    try {
+      await onSave({
+        id: initial?.id || undefined,
+        question,
+        answer,
+        category,
+        status,
+      });
+      onClose();
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-3">
       <div className="w-full max-w-xl rounded-2xl bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
-          <h2 className="text-[14px] font-semibold text-slate-900">
-            {initial ? "Edit FAQ" : "Add new FAQ"}
-          </h2>
+          <h2 className="text-[14px] font-semibold text-slate-900">{initial ? "Edit FAQ" : "Add new FAQ"}</h2>
           <button type="button" onClick={onClose} className="inline-flex h-7 w-7 items-center justify-center rounded-full hover:bg-slate-100">
             <X className="h-4 w-4 text-slate-500" />
           </button>
@@ -868,11 +990,20 @@ function AddFaqModal(props: {
           </div>
 
           <div className="flex flex-col gap-2 pt-1 sm:flex-row">
-            <button type="button" onClick={onClose} className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
+            >
               Cancel
             </button>
-            <button type="submit" className="flex-1 rounded-lg bg-[#2563FF] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#1d4ed8]">
-              {initial ? "Save" : "Add"}
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex-1 rounded-lg bg-[#2563FF] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#1d4ed8] disabled:opacity-60"
+            >
+              {saving ? "Saving..." : initial ? "Save" : "Add"}
             </button>
           </div>
         </form>
@@ -890,10 +1021,16 @@ function AddArticleModal(props: {
   const [title, setTitle] = useState(initial?.title ?? "");
   const [category, setCategory] = useState(initial?.category ?? "");
   const [content, setContent] = useState(initial?.content ?? "");
+  const [saving, setSaving] = useState(false);
 
   async function submit(status: PublishStatus) {
-    await onSave({ id: initial?.id || undefined, title, content, category, status });
-    onClose();
+    setSaving(true);
+    try {
+      await onSave({ id: initial?.id || undefined, title, content, category, status });
+      onClose();
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -938,14 +1075,29 @@ function AddArticleModal(props: {
           </div>
 
           <div className="flex flex-col gap-2 pt-1 sm:flex-row">
-            <button type="button" onClick={onClose} className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
+            >
               Cancel
             </button>
-            <button type="button" onClick={() => submit("Draft")} className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300">
-              Save Draft
+            <button
+              type="button"
+              onClick={() => submit("Draft")}
+              disabled={saving}
+              className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
+            >
+              {saving ? "Saving..." : "Save Draft"}
             </button>
-            <button type="button" onClick={() => submit("Published")} className="flex-1 rounded-lg bg-[#2563FF] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#1d4ed8]">
-              Publish
+            <button
+              type="button"
+              onClick={() => submit("Published")}
+              disabled={saving}
+              className="flex-1 rounded-lg bg-[#2563FF] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#1d4ed8] disabled:opacity-60"
+            >
+              {saving ? "Saving..." : "Publish"}
             </button>
           </div>
         </form>
@@ -965,10 +1117,16 @@ function DocModal(props: {
   const [version, setVersion] = useState(initial?.version ?? "");
   const [notes, setNotes] = useState(initial?.notes ?? "");
   const [content, setContent] = useState(initial?.content ?? "");
+  const [saving, setSaving] = useState(false);
 
   async function submit(status: PublishStatus) {
-    await onSave({ id: initial?.id || undefined, type, version, notes, content, status });
-    onClose();
+    setSaving(true);
+    try {
+      await onSave({ id: initial?.id || undefined, type, version, notes, content, status });
+      onClose();
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -1016,14 +1174,29 @@ function DocModal(props: {
           </div>
 
           <div className="flex flex-col gap-2 pt-1 sm:flex-row">
-            <button type="button" onClick={onClose} className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
+            >
               Cancel
             </button>
-            <button type="button" onClick={() => submit("Draft")} className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300">
-              Save Draft
+            <button
+              type="button"
+              onClick={() => submit("Draft")}
+              disabled={saving}
+              className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
+            >
+              {saving ? "Saving..." : "Save Draft"}
             </button>
-            <button type="button" onClick={() => submit("Published")} className="flex-1 rounded-lg bg-[#2563FF] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#1d4ed8]">
-              Publish
+            <button
+              type="button"
+              onClick={() => submit("Published")}
+              disabled={saving}
+              className="flex-1 rounded-lg bg-[#2563FF] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#1d4ed8] disabled:opacity-60"
+            >
+              {saving ? "Saving..." : "Publish"}
             </button>
           </div>
         </form>
@@ -1043,10 +1216,16 @@ function GuidelineModal(props: {
   const [sectionTitle, setSectionTitle] = useState(initial?.sectionTitle ?? "");
   const [notes, setNotes] = useState(initial?.notes ?? "");
   const [content, setContent] = useState(initial?.content ?? "");
+  const [saving, setSaving] = useState(false);
 
   async function submit(status: PublishStatus) {
-    await onSave({ id: initial?.id || undefined, audience, sectionTitle, notes, content, status });
-    onClose();
+    setSaving(true);
+    try {
+      await onSave({ id: initial?.id || undefined, audience, sectionTitle, notes, content, status });
+      onClose();
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -1094,14 +1273,29 @@ function GuidelineModal(props: {
           </div>
 
           <div className="flex flex-col gap-2 pt-1 sm:flex-row">
-            <button type="button" onClick={onClose} className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
+            >
               Cancel
             </button>
-            <button type="button" onClick={() => submit("Draft")} className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300">
-              Save Draft
+            <button
+              type="button"
+              onClick={() => submit("Draft")}
+              disabled={saving}
+              className="flex-1 rounded-lg bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-800 hover:bg-slate-300 disabled:opacity-60"
+            >
+              {saving ? "Saving..." : "Save Draft"}
             </button>
-            <button type="button" onClick={() => submit("Published")} className="flex-1 rounded-lg bg-[#2563FF] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#1d4ed8]">
-              Publish
+            <button
+              type="button"
+              onClick={() => submit("Published")}
+              disabled={saving}
+              className="flex-1 rounded-lg bg-[#2563FF] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#1d4ed8] disabled:opacity-60"
+            >
+              {saving ? "Saving..." : "Publish"}
             </button>
           </div>
         </form>
