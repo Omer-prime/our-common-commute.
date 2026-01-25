@@ -1,13 +1,7 @@
 // src/app/driver/dashboard/profile/page.tsx
 "use client";
 
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Image from "next/image";
 import { DriverDashboardShell } from "@/src/components/DriverDashboardShell";
 import { apiFetch, API_URL, type ApiFail } from "@/src/lib/api";
@@ -29,7 +23,19 @@ import {
   UploadCloud,
   Pencil,
   Loader2,
+  RefreshCw,
 } from "lucide-react";
+
+/* -------------------------------------------------------------------------- */
+/*  REALTIME EVENT                                                            */
+/* -------------------------------------------------------------------------- */
+
+const DRIVER_PROFILE_CHANGED_EVENT = "occ:driver-profile-changed";
+
+function emitDriverProfileChanged() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(DRIVER_PROFILE_CHANGED_EVENT));
+}
 
 /* -------------------------------------------------------------------------- */
 /*  TYPES                                                                     */
@@ -119,15 +125,7 @@ type PatchSecurityRes = {
 
 type PatchPrefsRes = {
   ok: true;
-  preference: {
-    language: string;
-    notifications: {
-      rideUpdates: boolean;
-      paymentAlerts: boolean;
-      shiftReminders: boolean;
-      serviceAlerts: boolean;
-    };
-  };
+  preference: ProfileApiResponse["preference"];
 };
 
 type WorkLocationRes = { ok: true; workLocation: WorkLocation };
@@ -176,24 +174,42 @@ function apiErrorToText(e: unknown) {
 function assetUrl(u?: string | null) {
   if (!u) return null;
   if (u.startsWith("http://") || u.startsWith("https://")) return u;
-  // backend returns "/uploads/xxx"
   if (u.startsWith("/")) return `${API_URL}${u}`;
   return `${API_URL}/${u}`;
 }
 
 function fmtMoney(x: number) {
-  return `$${Number.isFinite(x) ? x : 0}`;
+  const n = Number.isFinite(x) ? x : 0;
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    }).format(n);
+  } catch {
+    return `$${n}`;
+  }
 }
 
 function pickAuthTokenFromStorage(): string | null {
   if (typeof window === "undefined") return null;
-  // try common keys (in case your apiFetch uses one of these)
-  const keys = ["accessToken", "token", "authToken", "jwt", "ACCESS_TOKEN"];
+  const keys = ["accessToken", "access_token", "token", "authToken", "jwt", "ACCESS_TOKEN"];
   for (const k of keys) {
     const v = window.localStorage.getItem(k);
     if (v && v.trim()) return v;
   }
   return null;
+}
+
+function clearAuthStorage() {
+  if (typeof window === "undefined") return;
+
+  const keys = ["accessToken", "access_token", "token", "authToken", "jwt", "ACCESS_TOKEN", "refreshToken", "refresh_token"];
+
+  for (const k of keys) {
+    window.localStorage.removeItem(k);
+    window.sessionStorage.removeItem(k);
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -217,16 +233,19 @@ export default function DriverProfilePage() {
   // Desktop section
   const [section, setSection] = useState<ProfileSection>("driverInfo");
 
-  const [avatarUploading, setAvatarUploading] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
-
   // Mobile section (null = show only sidebar)
   const [mobileSection, setMobileSection] = useState<ProfileSection | null>(null);
 
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [vehicleImageUploading, setVehicleImageUploading] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
   const [preferenceView, setPreferenceView] = useState<"main" | "notifications">("main");
   const [showEditVehicle, setShowEditVehicle] = useState(false);
-  // Data states (real backend)
+
+  // Data states
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -237,8 +256,6 @@ export default function DriverProfilePage() {
     imageUrl: null,
     details: [],
   });
-
-  const [vehicleImageUploading, setVehicleImageUploading] = useState(false);
 
   const [securityState, setSecurityState] = useState({
     faceRecognition: true,
@@ -258,7 +275,7 @@ export default function DriverProfilePage() {
   const [showChangeLocation, setShowChangeLocation] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
 
-  // Support state (shared between desktop + mobile)
+  // Support state
   const [supportTab, setSupportTab] = useState<SupportChannel>("chat");
   const [supportConversations, setSupportConversations] = useState<SupportConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string>("");
@@ -269,33 +286,67 @@ export default function DriverProfilePage() {
     return found ?? supportConversations[0];
   }, [supportConversations, activeConversationId]);
 
-  async function loadProfile() {
+  // keep activeConversationId valid when list changes
+  useEffect(() => {
+    if (!supportConversations.length) {
+      if (activeConversationId) setActiveConversationId("");
+      return;
+    }
+    if (!activeConversationId) {
+      setActiveConversationId(supportConversations[0].id);
+      return;
+    }
+    const exists = supportConversations.some((c) => c.id === activeConversationId);
+    if (!exists) setActiveConversationId(supportConversations[0].id);
+  }, [supportConversations, activeConversationId]);
+
+  async function loadProfile(opts?: { silent?: boolean; onlySupport?: boolean }) {
+    const silent = !!opts?.silent;
+    const onlySupport = !!opts?.onlySupport;
+
     setActionError(null);
     setPageError(null);
-    setLoading(true);
+
+    if (!silent) setLoading(true);
+    if (silent) setRefreshing(true);
+
     try {
-      // ✅ IMPORTANT: backend route is /driver/profile (NOT /api/driver/profile)
       const data = await apiFetch<ProfileApiResponse>("/driver/profile", {
         method: "GET",
         noStore: true,
       });
 
-      setDriver(data.driver);
-      setDocuments(data.documents ?? []);
-      setWorkLocation(data.workLocation ?? FALLBACK_WORK_LOCATION);
-      setVehicle(data.vehicle ?? { imageUrl: null, details: [] });
-      setSecurityState({
-        faceRecognition: !!data.security?.faceRecognition,
-        twoFactorAuth: !!data.security?.twoFactorAuth,
-      });
-      setPreference(data.preference ?? preference);
+      if (!onlySupport) {
+        setDriver(data.driver);
+        setDocuments(data.documents ?? []);
+        setWorkLocation(data.workLocation ?? FALLBACK_WORK_LOCATION);
+        setVehicle(data.vehicle ?? { imageUrl: null, details: [] });
+        setSecurityState({
+          faceRecognition: !!data.security?.faceRecognition,
+          twoFactorAuth: !!data.security?.twoFactorAuth,
+        });
+        setPreference(data.preference ?? preference);
+      }
+
       setSupportConversations(data.supportConversations ?? []);
-      const firstId = data.supportConversations?.[0]?.id ?? "";
-      setActiveConversationId(firstId);
+
+      // if this is a full load, sync active conversation
+      if (!onlySupport) {
+        const firstId = data.supportConversations?.[0]?.id ?? "";
+        setActiveConversationId((prev) => prev || firstId);
+      }
     } catch (e) {
+      const err = e as Partial<ApiFail>;
       setPageError(apiErrorToText(e));
+
+      // optional redirect on 401
+      if (err?.status === 401 && typeof window !== "undefined") {
+        clearAuthStorage();
+        window.location.href = "/driver/login";
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
+      if (silent) setRefreshing(false);
     }
   }
 
@@ -303,6 +354,18 @@ export default function DriverProfilePage() {
     void loadProfile();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // realtime-ish: poll support only when support is open (desktop or mobile)
+  useEffect(() => {
+    const supportOpen = section === "support" || mobileSection === "support";
+    if (!supportOpen) return;
+
+    const id = window.setInterval(() => {
+      void loadProfile({ silent: true, onlySupport: true });
+    }, 8000);
+
+    return () => window.clearInterval(id);
+  }, [section, mobileSection]);
 
   const handleSidebarClick = (next: ProfileSection) => {
     setSection(next);
@@ -319,7 +382,7 @@ export default function DriverProfilePage() {
   async function patchSecurity(partial: Partial<{ faceRecognition: boolean; twoFactorAuth: boolean }>) {
     setActionError(null);
 
-    // optimistic update
+    // optimistic
     setSecurityState((prev) => ({ ...prev, ...partial }));
 
     try {
@@ -332,23 +395,21 @@ export default function DriverProfilePage() {
         faceRecognition: res.security.faceRecognition,
         twoFactorAuth: res.security.twoFactorAuth,
       });
+
+      emitDriverProfileChanged();
     } catch (e) {
       setActionError(apiErrorToText(e));
       void loadProfile();
     }
   }
 
-  async function patchPrefs(
-    partial:
-      | ({ language: string } & Partial<ProfileApiResponse["preference"]["notifications"]>)
-      | Partial<ProfileApiResponse["preference"]["notifications"]>
-  ) {
+  async function patchPrefs(partial: Partial<{ language: string } & ProfileApiResponse["preference"]["notifications"]>) {
     setActionError(null);
 
     // optimistic
     setPreference((prev) => ({
       ...prev,
-      ...(typeof (partial as any).language === "string" ? { language: (partial as any).language } : {}),
+      ...(typeof partial.language === "string" ? { language: partial.language } : {}),
       notifications: { ...prev.notifications, ...(partial as any) },
     }));
 
@@ -357,7 +418,9 @@ export default function DriverProfilePage() {
         method: "PATCH",
         json: partial,
       });
+
       setPreference(res.preference);
+      emitDriverProfileChanged();
     } catch (e) {
       setActionError(apiErrorToText(e));
       void loadProfile();
@@ -373,6 +436,8 @@ export default function DriverProfilePage() {
       });
       setWorkLocation(res.workLocation);
       setShowChangeLocation(false);
+
+      emitDriverProfileChanged();
     } catch (e) {
       setActionError(apiErrorToText(e));
     }
@@ -412,16 +477,16 @@ export default function DriverProfilePage() {
           };
         })
       );
+
+      emitDriverProfileChanged();
     } catch (e) {
       setActionError(apiErrorToText(e));
     }
   }
 
-  // ✅ NEW: upload vehicle image (multipart/form-data) -> POST /driver/profile/vehicle/image
   async function uploadVehicleImage(file: File) {
     setActionError(null);
 
-    // basic client validation
     if (!file.type.startsWith("image/")) {
       setActionError("Please select an image file.");
       return;
@@ -468,32 +533,15 @@ export default function DriverProfilePage() {
         throw err;
       }
 
-      // update UI instantly
       setVehicle((prev) => ({ ...prev, imageUrl: data.imageUrl }));
+      emitDriverProfileChanged();
 
-      // optional: reload to keep everything synced
-      void loadProfile();
+      // keep synced
+      void loadProfile({ silent: true });
     } catch (e) {
       setActionError(apiErrorToText(e));
     } finally {
       setVehicleImageUploading(false);
-    }
-  }
-  function clearAuthStorage() {
-    if (typeof window === "undefined") return;
-
-    const keys = [
-      "accessToken",
-      "token",
-      "authToken",
-      "jwt",
-      "ACCESS_TOKEN",
-      "refreshToken",
-    ];
-
-    for (const k of keys) {
-      window.localStorage.removeItem(k);
-      window.sessionStorage.removeItem(k);
     }
   }
 
@@ -545,11 +593,11 @@ export default function DriverProfilePage() {
         throw err;
       }
 
-      // update UI instantly
       setDriver((prev) => ({ ...prev, avatarUrl: parsed.avatarUrl }));
+      emitDriverProfileChanged();
 
-      // keep everything synced
-      void loadProfile();
+      // keep synced
+      void loadProfile({ silent: true });
     } catch (e) {
       setActionError(apiErrorToText(e));
     } finally {
@@ -562,13 +610,11 @@ export default function DriverProfilePage() {
     setLoggingOut(true);
 
     try {
-      // attempt backend cookie/session logout
       await apiFetch<{ ok: true }>("/driver/profile/logout", { method: "POST" });
     } catch {
-      // ignore (still clear local tokens)
+      // ignore
     } finally {
       clearAuthStorage();
-      // hard redirect is most reliable
       window.location.href = "/driver/login";
     }
   }
@@ -580,11 +626,22 @@ export default function DriverProfilePage() {
     <DriverDashboardShell>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <h1 className="text-sm font-semibold text-slate-100">Profile</h1>
+
+          <button
+            type="button"
+            onClick={() => void loadProfile({ silent: true })}
+            className="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-[#07152f] px-3 py-1.5 text-[11px] text-slate-200 hover:bg-[#0b1b3a]"
+            title="Refresh"
+            aria-label="Refresh profile"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+            <span>{refreshing ? "Refreshing" : "Refresh"}</span>
+          </button>
         </div>
 
-        {/* Errors / Loading */}
+        {/* Errors */}
         {pageError && (
           <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-200">
             {pageError}
@@ -596,9 +653,8 @@ export default function DriverProfilePage() {
           </div>
         )}
 
-        {/* DESKTOP LAYOUT (sidebar + content) */}
+        {/* DESKTOP */}
         <div className="hidden items-start gap-6 lg:grid lg:grid-cols-3">
-          {/* LEFT COLUMN (1/3) */}
           <div className="lg:col-span-1">
             <ProfileSidebar
               driver={driver}
@@ -613,19 +669,12 @@ export default function DriverProfilePage() {
             />
           </div>
 
-          {/* RIGHT COLUMN (2/3) */}
           <section className="lg:col-span-2 rounded-2xl border border-slate-800 bg-[#050f25] p-4 text-xs text-slate-200 sm:p-6">
             {section === "driverInfo" && <DriverInfoPanel driver={driver} />}
-
             {section === "documents" && <DocumentsPanel documents={documents} />}
-
             {section === "workLocation" && (
-              <WorkLocationPanel
-                workLocation={workLocation}
-                onRequestChange={() => setShowChangeLocation(true)}
-              />
+              <WorkLocationPanel workLocation={workLocation} onRequestChange={() => setShowChangeLocation(true)} />
             )}
-
             {section === "vehicleDetails" && (
               <VehicleDetailsPanel
                 vehicleImageUrl={vehicleImg}
@@ -635,7 +684,6 @@ export default function DriverProfilePage() {
                 onEditDetails={() => setShowEditVehicle(true)}
               />
             )}
-
             {section === "security" && (
               <SecurityPanel
                 state={securityState}
@@ -644,35 +692,32 @@ export default function DriverProfilePage() {
                 onToggleTwoFactor={() => void patchSecurity({ twoFactorAuth: !securityState.twoFactorAuth })}
               />
             )}
-
             {section === "preference" && (
               <PreferencePanel
                 view={preferenceView}
                 preference={preference}
                 onOpenNotifications={() => setPreferenceView("notifications")}
                 onBackToMain={() => setPreferenceView("main")}
-                onToggleNotification={(key) =>
-                  void patchPrefs({ [key]: !preference.notifications[key] } as Partial<
-                    ProfileApiResponse["preference"]["notifications"]
-                  >)
-                }
+                onToggleNotification={(key) => void patchPrefs({ [key]: !preference.notifications[key] } as any)}
               />
             )}
-
-            {section === "support" && activeConversation && (
+            {section === "support" && (
               <SupportPanelDesktop
                 tab={supportTab}
                 onTabChange={setSupportTab}
                 conversations={supportConversations}
                 activeConversation={activeConversation}
                 onSelectConversation={setActiveConversationId}
-                onSend={(text) => void sendSupportMessage(activeConversation.id, text)}
+                onSend={(text) => {
+                  if (!activeConversation) return;
+                  void sendSupportMessage(activeConversation.id, text);
+                }}
               />
             )}
           </section>
         </div>
 
-        {/* MOBILE LAYOUT */}
+        {/* MOBILE */}
         <div className="space-y-4 lg:hidden">
           {mobileSection === null ? (
             <ProfileSidebar
@@ -681,6 +726,10 @@ export default function DriverProfilePage() {
               loading={loading}
               activeSection={section}
               onSectionChange={handleSidebarClick}
+              avatarUploading={avatarUploading}
+              onUploadAvatar={(f) => void uploadAvatarImage(f)}
+              loggingOut={loggingOut}
+              onLogout={() => void handleLogout()}
             />
           ) : mobileSection === "support" ? (
             <SupportPanelMobile
@@ -692,32 +741,27 @@ export default function DriverProfilePage() {
               view={mobileSupportView}
               onChangeView={setMobileSupportView}
               onBackFromSection={closeMobileSection}
-              onSend={(text) =>
-                activeConversation ? void sendSupportMessage(activeConversation.id, text) : undefined
-              }
+              onSend={(text) => {
+                if (!activeConversation) return;
+                void sendSupportMessage(activeConversation.id, text);
+              }}
             />
           ) : (
             <MobileSectionContainer title={getSectionTitle(mobileSection)} onBack={closeMobileSection}>
               {mobileSection === "driverInfo" && <DriverInfoPanel driver={driver} />}
-
               {mobileSection === "documents" && <DocumentsPanel documents={documents} />}
-
               {mobileSection === "workLocation" && (
-                <WorkLocationPanel
-                  workLocation={workLocation}
-                  onRequestChange={() => setShowChangeLocation(true)}
-                />
+                <WorkLocationPanel workLocation={workLocation} onRequestChange={() => setShowChangeLocation(true)} />
               )}
-
               {mobileSection === "vehicleDetails" && (
                 <VehicleDetailsPanel
                   vehicleImageUrl={vehicleImg}
                   vehicleDetails={vehicle.details}
                   uploading={vehicleImageUploading}
                   onUploadImage={(f) => void uploadVehicleImage(f)}
+                  onEditDetails={() => setShowEditVehicle(true)}
                 />
               )}
-
               {mobileSection === "security" && (
                 <SecurityPanel
                   state={securityState}
@@ -726,25 +770,20 @@ export default function DriverProfilePage() {
                   onToggleTwoFactor={() => void patchSecurity({ twoFactorAuth: !securityState.twoFactorAuth })}
                 />
               )}
-
               {mobileSection === "preference" && (
                 <PreferencePanel
                   view={preferenceView}
                   preference={preference}
                   onOpenNotifications={() => setPreferenceView("notifications")}
                   onBackToMain={() => setPreferenceView("main")}
-                  onToggleNotification={(key) =>
-                    void patchPrefs({ [key]: !preference.notifications[key] } as Partial<
-                      ProfileApiResponse["preference"]["notifications"]
-                    >)
-                  }
+                  onToggleNotification={(key) => void patchPrefs({ [key]: !preference.notifications[key] } as any)}
                 />
               )}
             </MobileSectionContainer>
           )}
         </div>
 
-        {/* CHANGE LOCATION OVERLAY */}
+        {/* Overlays */}
         {showChangeLocation && (
           <ChangeLocationOverlay
             initialValues={workLocation}
@@ -752,19 +791,20 @@ export default function DriverProfilePage() {
             onSave={(values) => void submitWorkLocation(values)}
           />
         )}
+
         {showEditVehicle && (
           <EditVehicleOverlay
             initialDetails={vehicle.details}
             onClose={() => setShowEditVehicle(false)}
             onSave={(updated) => {
-              // call backend PATCH here
+              // TODO: call backend PATCH here when ready
               setVehicle((prev) => ({ ...prev, details: updated }));
               setShowEditVehicle(false);
+              emitDriverProfileChanged();
             }}
           />
         )}
 
-        {/* CHANGE PASSWORD OVERLAY */}
         {showChangePassword && (
           <ChangePasswordOverlay
             onClose={() => setShowChangePassword(false)}
@@ -779,6 +819,7 @@ export default function DriverProfilePage() {
 /* -------------------------------------------------------------------------- */
 /*  LEFT SIDEBAR                                                              */
 /* -------------------------------------------------------------------------- */
+
 function ProfileSidebar({
   driver,
   avatarSrc,
@@ -804,45 +845,43 @@ function ProfileSidebar({
 
   return (
     <aside className="space-y-4">
-      {/* Driver summary card */}
       <div className="rounded-2xl border border-slate-800 bg-[#050f25] px-5 py-6 text-xs text-slate-200">
         <div className="flex flex-col items-center gap-3">
-  <div className="relative">
-    <input
-      ref={fileRef}
-      type="file"
-      accept="image/*"
-      className="hidden"
-      onChange={(e) => {
-        const f = e.target.files?.[0];
-        e.target.value = "";
-        if (!f) return;
-        onUploadAvatar?.(f);
-      }}
-    />
+          <div className="relative">
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (!f) return;
+                onUploadAvatar?.(f);
+              }}
+            />
 
-    <button
-      type="button"
-      onClick={() => fileRef.current?.click()}
-      disabled={!!avatarUploading}
-      className="relative h-16 w-16 overflow-hidden rounded-full border border-slate-600"
-      title="Change profile photo"
-    >
-      <img src={avatarSrc} alt={driver.name} className="h-full w-full object-cover" />
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={!!avatarUploading}
+              className="relative h-16 w-16 overflow-hidden rounded-full border border-slate-600"
+              title="Change profile photo"
+              aria-label="Change profile photo"
+            >
+              <img src={avatarSrc} alt={driver.name} className="h-full w-full object-cover" />
 
-      {/* dark overlay on hover */}
-      <span className="absolute inset-0 bg-black/0 transition hover:bg-black/20" />
+              <span className="absolute inset-0 bg-black/0 transition hover:bg-black/20" />
 
-      {/* pencil icon */}
-      <span className="absolute bottom-1 right-1 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[#020818] border border-slate-700">
-        {avatarUploading ? (
-          <Loader2 className="h-4 w-4 animate-spin text-slate-200" />
-        ) : (
-          <Pencil className="h-4 w-4 text-slate-200" />
-        )}
-      </span>
-    </button>
-  </div>
+              <span className="absolute bottom-1 right-1 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[#020818] border border-slate-700">
+                {avatarUploading ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-slate-200" />
+                ) : (
+                  <Pencil className="h-4 w-4 text-slate-200" />
+                )}
+              </span>
+            </button>
+          </div>
 
           <div className="space-y-0.5 text-center">
             <div className="text-sm font-semibold text-slate-50">{loading ? "Loading..." : driver.name}</div>
@@ -854,15 +893,13 @@ function ProfileSidebar({
           </div>
         </div>
 
-        {/* Stats */}
         <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-          <SidebarStat label="Ratings" value={driver.rating.toFixed(1)} />
-          <SidebarStat label="Trips" value={driver.trips.toString()} />
-          <SidebarStat label="Total Earned" value={fmtMoney(driver.totalEarned)} />
+          <SidebarStat label="Ratings" value={Number(driver.rating || 0).toFixed(1)} />
+          <SidebarStat label="Trips" value={String(driver.trips || 0)} />
+          <SidebarStat label="Total Earned" value={fmtMoney(driver.totalEarned || 0)} />
         </div>
       </div>
 
-      {/* Menu */}
       <nav className="rounded-2xl border border-slate-800 bg-[#050f25] p-2 text-xs text-slate-200">
         <ProfileNavItem
           icon={<User className="h-3.5 w-3.5" />}
@@ -915,7 +952,6 @@ function ProfileSidebar({
         />
       </nav>
 
-      {/* Switch to rider + logout */}
       <div className="space-y-2">
         <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-[#050f25] px-4 py-3 text-xs">
           <div className="space-y-0.5">
@@ -924,23 +960,29 @@ function ProfileSidebar({
           </div>
 
           <Toggle
-            checked
+            checked={false}
             onChange={() => {
               // later: route to rider dashboard
             }}
           />
         </div>
 
-<button
-  type="button"
-  onClick={onLogout}
-  disabled={!!loggingOut}
-  className={`flex w-full items-center justify-center gap-2 rounded-full px-4 py-2 text-xs font-medium
-    ${loggingOut ? "cursor-not-allowed bg-red-500/10 text-red-300" : "bg-red-500/10 text-red-400 hover:bg-red-500/15"}`}
->
-  <LogOut className="h-3.5 w-3.5" />
-  <span>{loggingOut ? "Logging out..." : "Logout"}</span>
-</button>
+        {onLogout && (
+          <button
+            type="button"
+            onClick={onLogout}
+            disabled={!!loggingOut}
+            className={`flex w-full items-center justify-center gap-2 rounded-full px-4 py-2 text-xs font-medium
+              ${
+                loggingOut
+                  ? "cursor-not-allowed bg-red-500/10 text-red-300"
+                  : "bg-red-500/10 text-red-400 hover:bg-red-500/15"
+              }`}
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            <span>{loggingOut ? "Logging out..." : "Logout"}</span>
+          </button>
+        )}
       </div>
     </aside>
   );
@@ -972,8 +1014,9 @@ function ProfileNavItem({
     <button
       type="button"
       onClick={onClick}
-      className={`flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition-colors ${active ? "bg-[#0b1735] text-slate-50" : "bg-transparent text-slate-200 hover:bg-[#060f24]"
-        }`}
+      className={`flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition-colors ${
+        active ? "bg-[#0b1735] text-slate-50" : "bg-transparent text-slate-200 hover:bg-[#060f24]"
+      }`}
     >
       <span className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-blue-600/15 text-blue-400">
         {icon}
@@ -1018,7 +1061,7 @@ function MobileSectionContainer({
 }
 
 /* -------------------------------------------------------------------------- */
-/*  RIGHT-SIDE PANELS                                                         */
+/*  PANELS                                                                    */
 /* -------------------------------------------------------------------------- */
 
 function SectionHeader({ title, subtitle }: { title: string; subtitle: string }) {
@@ -1067,53 +1110,60 @@ function DocumentsPanel({ documents }: { documents: DriverDocument[] }) {
       <SectionHeader title="Documents" subtitle="Upload and manage your required documents." />
 
       <div className="space-y-3">
-        {documents.map((doc) => (
-          <div
-            key={doc.id}
-            className="space-y-2 rounded-2xl border border-slate-800 bg-[#07152f] px-4 py-3"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900">
-                  <FileText className="h-4 w-4 text-slate-200" />
+        {documents.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-700 bg-[#07152f]/60 px-4 py-6 text-[11px] text-slate-300">
+            No documents found.
+          </div>
+        ) : (
+          documents.map((doc) => (
+            <div key={doc.id} className="space-y-2 rounded-2xl border border-slate-800 bg-[#07152f] px-4 py-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900">
+                    <FileText className="h-4 w-4 text-slate-200" />
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-semibold text-slate-100">{doc.title}</div>
+                    <div className="text-[10px] text-slate-500">Uploaded document</div>
+                  </div>
                 </div>
-                <div>
-                  <div className="text-[11px] font-semibold text-slate-100">{doc.title}</div>
-                  <div className="text-[10px] text-slate-500">Uploaded document</div>
-                </div>
+
+                {doc.status === "verified" ? (
+                  <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-[10px] font-medium text-emerald-400">
+                    Verified
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-amber-500/10 px-3 py-1 text-[10px] font-medium text-amber-300">
+                    Pending
+                  </span>
+                )}
               </div>
 
-              {doc.status === "verified" && (
-                <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-[10px] font-medium text-emerald-400">
-                  Verified
-                </span>
-              )}
-              {doc.status === "pending" && (
-                <span className="rounded-full bg-amber-500/10 px-3 py-1 text-[10px] font-medium text-amber-300">
-                  Pending
-                </span>
-              )}
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <button
+                  type="button"
+                  className="w-full rounded-lg border border-slate-700 bg-transparent px-3 py-2 text-[11px] font-medium text-slate-200 hover:bg-slate-900"
+                  onClick={() => {
+                    // TODO: attach file picker + upload route when you finalize backend
+                  }}
+                >
+                  Change document
+                </button>
+                <button
+                  type="button"
+                  className="w-full rounded-lg bg-blue-600 px-3 py-2 text-[11px] font-medium text-white hover:bg-blue-700"
+                  onClick={() => {
+                    if (!doc.url) return;
+                    const u = assetUrl(doc.url);
+                    if (u) window.open(u, "_blank");
+                  }}
+                >
+                  View document
+                </button>
+              </div>
             </div>
-
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <button
-                type="button"
-                className="w-full rounded-lg border border-slate-700 bg-transparent px-3 py-2 text-[11px] font-medium text-slate-200 hover:bg-slate-900"
-              >
-                Change document
-              </button>
-              <button
-                type="button"
-                className="w-full rounded-lg bg-blue-600 px-3 py-2 text-[11px] font-medium text-white hover:bg-blue-700"
-                onClick={() => {
-                  if (doc.url) window.open(assetUrl(doc.url) ?? undefined, "_blank");
-                }}
-              >
-                View document
-              </button>
-            </div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
     </div>
   );
@@ -1179,36 +1229,41 @@ function VehicleDetailsPanel({
 }) {
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  const details = vehicleDetails?.length
-    ? vehicleDetails
-    : [
-      { id: "make", label: "Vehicle make", value: "—" },
-      { id: "color", label: "Car color", value: "—" },
-      { id: "seats", label: "Number of seats", value: "—" },
-      { id: "model", label: "Model", value: "—" },
-      { id: "year", label: "Year of production", value: "—" },
-      { id: "plate", label: "License plate", value: "—" },
-    ];
+  const details =
+    vehicleDetails?.length > 0
+      ? vehicleDetails
+      : [
+          { id: "make", label: "Vehicle make", value: "—" },
+          { id: "color", label: "Car color", value: "—" },
+          { id: "seats", label: "Number of seats", value: "—" },
+          { id: "model", label: "Model", value: "—" },
+          { id: "year", label: "Year of production", value: "—" },
+          { id: "plate", label: "License plate", value: "—" },
+        ];
 
   return (
     <div className="space-y-6">
       <SectionHeader title="Vehicle details" subtitle="Keep your vehicle info up to date." />
 
-      {/* Car image card + upload */}
       <div className="relative overflow-hidden rounded-2xl border border-slate-800 bg-gradient-to-br from-[#07152f] via-[#050f25] to-[#020818] px-6 py-5">
         <div className="mb-3 flex items-center justify-between text-[11px] text-slate-300">
           <span className="font-medium text-slate-100">Active vehicle</span>
 
-          <div className="flex items-center gap-2">
+          {/* placeholders for later multi-vehicle */}
+          <div className="flex items-center gap-2 opacity-50">
             <button
               type="button"
+              disabled
               className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-700 bg-black/30"
+              title="Coming soon"
             >
               <ChevronRight className="h-4 w-4 rotate-180 text-slate-200" />
             </button>
             <button
               type="button"
+              disabled
               className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-700 bg-black/30"
+              title="Coming soon"
             >
               <ChevronRight className="h-4 w-4 text-slate-200" />
             </button>
@@ -1225,11 +1280,8 @@ function VehicleDetailsPanel({
           </div>
         </div>
 
-        {/* Upload controls */}
         <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-[10px] text-slate-400">
-            Upload a new vehicle photo (max 7MB).
-          </div>
+          <div className="text-[10px] text-slate-400">Upload a new vehicle photo (max 7MB).</div>
 
           <div className="flex items-center gap-2">
             <input
@@ -1239,7 +1291,7 @@ function VehicleDetailsPanel({
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                e.target.value = ""; // allow re-select same file
+                e.target.value = "";
                 if (!f) return;
                 onUploadImage?.(f);
               }}
@@ -1249,10 +1301,9 @@ function VehicleDetailsPanel({
               type="button"
               disabled={!!uploading}
               onClick={() => fileRef.current?.click()}
-              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-[11px] font-medium ${uploading
-                ? "cursor-not-allowed bg-slate-700/50 text-slate-300"
-                : "bg-blue-600 text-white hover:bg-blue-700"
-                }`}
+              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-[11px] font-medium ${
+                uploading ? "cursor-not-allowed bg-slate-700/50 text-slate-300" : "bg-blue-600 text-white hover:bg-blue-700"
+              }`}
             >
               <UploadCloud className="h-4 w-4" />
               {uploading ? "Uploading..." : "Upload vehicle image"}
@@ -1261,25 +1312,19 @@ function VehicleDetailsPanel({
         </div>
       </div>
 
-      {/* Car details grid */}
       <div>
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-[12px] font-semibold text-slate-100">Car details</h3>
-          <button
-            type="button"
-            onClick={onEditDetails}
-            className="text-[11px] font-medium text-blue-400 hover:underline"
-          >
-            Edit details
-          </button>
+          {onEditDetails && (
+            <button type="button" onClick={onEditDetails} className="text-[11px] font-medium text-blue-400 hover:underline">
+              Edit details
+            </button>
+          )}
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
           {details.map((item) => (
-            <div
-              key={item.id}
-              className="flex items-start gap-3 rounded-2xl border border-slate-800 bg-[#07152f] px-4 py-3"
-            >
+            <div key={item.id} className="flex items-start gap-3 rounded-2xl border border-slate-800 bg-[#07152f] px-4 py-3">
               <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-blue-600/15 text-blue-400">
                 <Car className="h-3.5 w-3.5" />
               </div>
@@ -1342,8 +1387,9 @@ function SecurityRow({
 }) {
   return (
     <div
-      className={`flex items-center justify-between border-b border-slate-800/70 px-4 py-3 last:border-b-0 ${onClick ? "cursor-pointer hover:bg-[#050f25]" : ""
-        }`}
+      className={`flex items-center justify-between border-b border-slate-800/70 px-4 py-3 last:border-b-0 ${
+        onClick ? "cursor-pointer hover:bg-[#050f25]" : ""
+      }`}
       onClick={onClick}
     >
       <div>
@@ -1355,7 +1401,7 @@ function SecurityRow({
   );
 }
 
-/* -- Preference + Notification preference ---------------------------------- */
+/* -- Preference ------------------------------------------------------------ */
 
 function PreferencePanel({
   view,
@@ -1390,7 +1436,7 @@ function PreferencePanel({
           description="Switch between English and Spanish."
           value={preference.language ?? "English"}
           onClick={() => {
-            // Later: open language selector + call PATCH /driver/profile/preferences { language }
+            // TODO: open selector then PATCH /driver/profile/preferences { language }
           }}
         />
         <PreferenceRow
@@ -1416,8 +1462,9 @@ function PreferenceRow({
 }) {
   return (
     <div
-      className={`flex items-center justify-between border-b border-slate-800/70 px-4 py-3 last:border-b-0 ${onClick ? "cursor-pointer hover:bg-[#050f25]" : ""
-        }`}
+      className={`flex items-center justify-between border-b border-slate-800/70 px-4 py-3 last:border-b-0 ${
+        onClick ? "cursor-pointer hover:bg-[#050f25]" : ""
+      }`}
       onClick={onClick}
     >
       <div>
@@ -1496,31 +1543,37 @@ function SupportPanelDesktop({
   tab: SupportChannel;
   onTabChange: (t: SupportChannel) => void;
   conversations: SupportConversation[];
-  activeConversation: SupportConversation;
+  activeConversation: SupportConversation | undefined;
   onSelectConversation: (id: string) => void;
   onSend: (text: string) => void;
 }) {
   const [draft, setDraft] = useState("");
+  const endRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [activeConversation?.messages?.length]);
 
   return (
     <div className="flex h-full flex-col space-y-4">
       <SectionHeader title="Support" subtitle="Chat with support or contact via email." />
 
-      {/* Tabs */}
       <div className="flex max-w-md rounded-xl border border-slate-800 bg-[#07152f] p-1 text-[11px]">
         <button
           type="button"
           onClick={() => onTabChange("chat")}
-          className={`flex-1 rounded-lg px-4 py-2 font-medium ${tab === "chat" ? "bg-blue-600 text-white" : "bg-transparent text-slate-300 hover:bg-[#050f25]"
-            }`}
+          className={`flex-1 rounded-lg px-4 py-2 font-medium ${
+            tab === "chat" ? "bg-blue-600 text-white" : "bg-transparent text-slate-300 hover:bg-[#050f25]"
+          }`}
         >
           Chat
         </button>
         <button
           type="button"
           onClick={() => onTabChange("email")}
-          className={`flex-1 rounded-lg px-4 py-2 font-medium ${tab === "email" ? "bg-blue-600 text-white" : "bg-transparent text-slate-300 hover:bg-[#050f25]"
-            }`}
+          className={`flex-1 rounded-lg px-4 py-2 font-medium ${
+            tab === "email" ? "bg-blue-600 text-white" : "bg-transparent text-slate-300 hover:bg-[#050f25]"
+          }`}
         >
           Email
         </button>
@@ -1532,45 +1585,47 @@ function SupportPanelDesktop({
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[260px,minmax(0,1fr)]">
-          {/* Conversation list */}
           <div className="rounded-2xl border border-slate-800 bg-[#07152f] text-[11px]">
             <div className="border-b border-slate-800 px-4 py-3 font-medium text-slate-200">Conversations</div>
             <div className="divide-y divide-slate-800">
-              {conversations.map((conv) => (
-                <button
-                  key={conv.id}
-                  type="button"
-                  onClick={() => onSelectConversation(conv.id)}
-                  className={`flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors ${conv.id === activeConversation.id ? "bg-[#050f25]" : "hover:bg-[#050f25]"
+              {conversations.length === 0 ? (
+                <div className="px-4 py-6 text-[11px] text-slate-400">No conversations.</div>
+              ) : (
+                conversations.map((conv) => (
+                  <button
+                    key={conv.id}
+                    type="button"
+                    onClick={() => onSelectConversation(conv.id)}
+                    className={`flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors ${
+                      conv.id === activeConversation?.id ? "bg-[#050f25]" : "hover:bg-[#050f25]"
                     }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="relative h-8 w-8 overflow-hidden rounded-full bg-slate-600">
-                      <Image src="/driver-selfie.jpg" alt={conv.name} fill className="object-cover" />
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="relative h-8 w-8 overflow-hidden rounded-full bg-slate-600">
+                        <Image src="/driver-selfie.jpg" alt={conv.name} fill className="object-cover" />
+                      </div>
+                      <div className="space-y-0.5">
+                        <div className="text-[11px] font-semibold text-slate-100">{conv.name}</div>
+                        <div className="line-clamp-1 text-[10px] text-slate-400">{conv.tagLine}</div>
+                      </div>
                     </div>
-                    <div className="space-y-0.5">
-                      <div className="text-[11px] font-semibold text-slate-100">{conv.name}</div>
-                      <div className="line-clamp-1 text-[10px] text-slate-400">{conv.tagLine}</div>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="text-[10px] text-slate-500">{conv.lastTime}</span>
+                      {conv.unread && <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />}
                     </div>
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <span className="text-[10px] text-slate-500">{conv.lastTime}</span>
-                    {conv.unread && <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />}
-                  </div>
-                </button>
-              ))}
+                  </button>
+                ))
+              )}
             </div>
           </div>
 
-          {/* Chat window */}
           <div className="flex min-h-[360px] flex-col rounded-2xl border border-slate-800 bg-[#07152f]">
-            {/* Header */}
             <div className="flex items-center gap-3 border-b border-slate-800 px-4 py-3 text-[11px]">
               <div className="relative h-8 w-8 overflow-hidden rounded-full bg-slate-600">
-                <Image src="/driver-selfie.jpg" alt={activeConversation.name} fill className="object-cover" />
+                <Image src="/driver-selfie.jpg" alt={activeConversation?.name ?? "Support"} fill className="object-cover" />
               </div>
               <div>
-                <div className="text-[11px] font-semibold text-slate-100">{activeConversation.name}</div>
+                <div className="text-[11px] font-semibold text-slate-100">{activeConversation?.name ?? "Support"}</div>
                 <div className="flex items-center gap-1 text-[10px] text-emerald-400">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                   <span>Online</span>
@@ -1578,15 +1633,15 @@ function SupportPanelDesktop({
               </div>
             </div>
 
-            {/* Messages */}
             <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
-              {activeConversation.messages.map((msg) => {
+              {(activeConversation?.messages ?? []).map((msg) => {
                 const isAgent = msg.author === "agent";
                 return (
                   <div key={msg.id} className={`flex ${isAgent ? "justify-start" : "justify-end"}`}>
                     <div
-                      className={`max-w-xs rounded-2xl px-3 py-2 text-[11px] ${isAgent ? "bg-blue-600 text-white" : "bg-[#050f25] text-slate-100"
-                        }`}
+                      className={`max-w-xs rounded-2xl px-3 py-2 text-[11px] ${
+                        isAgent ? "bg-blue-600 text-white" : "bg-[#050f25] text-slate-100"
+                      }`}
                     >
                       <p>{msg.text}</p>
                       <div className="mt-1 text-[9px] text-slate-200/70">{msg.time}</div>
@@ -1594,9 +1649,9 @@ function SupportPanelDesktop({
                   </div>
                 );
               })}
+              <div ref={endRef} />
             </div>
 
-            {/* Composer */}
             <div className="border-t border-slate-800 px-4 py-3">
               <div className="flex items-center gap-2 rounded-full border border-slate-700 bg-[#020818] px-3 py-2">
                 <input
@@ -1605,6 +1660,15 @@ function SupportPanelDesktop({
                   className="w-full bg-transparent text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none"
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      const t = draft.trim();
+                      if (!t) return;
+                      onSend(t);
+                      setDraft("");
+                    }
+                  }}
                 />
                 <button
                   type="button"
@@ -1615,6 +1679,8 @@ function SupportPanelDesktop({
                     onSend(t);
                     setDraft("");
                   }}
+                  aria-label="Send"
+                  title="Send"
                 >
                   <Send className="h-3.5 w-3.5" />
                 </button>
@@ -1651,8 +1717,29 @@ function SupportPanelMobile({
   onSend: (text: string) => void;
 }) {
   const [draft, setDraft] = useState("");
+  const endRef = useRef<HTMLDivElement | null>(null);
 
-  if (!activeConversation) return null;
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [activeConversation?.messages?.length, view, tab]);
+
+  if (!activeConversation) {
+    return (
+      <section className="rounded-2xl border border-slate-800 bg-[#050f25] p-4 text-xs text-slate-200">
+        <div className="mb-4 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onBackFromSection}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#07152f] hover:bg-[#0b1b3a]"
+          >
+            <ArrowLeft className="h-4 w-4 text-slate-200" />
+          </button>
+          <span className="text-sm font-semibold text-slate-100">Support</span>
+        </div>
+        <div className="text-[11px] text-slate-400">No conversations.</div>
+      </section>
+    );
+  }
 
   const handleBack = () => {
     if (view === "chat") onChangeView("list");
@@ -1685,8 +1772,9 @@ function SupportPanelMobile({
             return (
               <div key={msg.id} className={`flex ${isAgent ? "justify-start" : "justify-end"}`}>
                 <div
-                  className={`max-w-[80%] rounded-2xl px-3 py-2 text-[11px] ${isAgent ? "bg-blue-600 text-white" : "bg-[#050f25] text-slate-100"
-                    }`}
+                  className={`max-w-[80%] rounded-2xl px-3 py-2 text-[11px] ${
+                    isAgent ? "bg-blue-600 text-white" : "bg-[#050f25] text-slate-100"
+                  }`}
                 >
                   <p>{msg.text}</p>
                   <div className="mt-1 text-[9px] text-slate-200/70">{msg.time}</div>
@@ -1694,6 +1782,7 @@ function SupportPanelMobile({
               </div>
             );
           })}
+          <div ref={endRef} />
         </div>
 
         <div className="border-t border-slate-800 pt-3">
@@ -1704,6 +1793,15 @@ function SupportPanelMobile({
               className="w-full bg-transparent text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  const t = draft.trim();
+                  if (!t) return;
+                  onSend(t);
+                  setDraft("");
+                }
+              }}
             />
             <button
               type="button"
@@ -1714,6 +1812,8 @@ function SupportPanelMobile({
                 onSend(t);
                 setDraft("");
               }}
+              aria-label="Send"
+              title="Send"
             >
               <Send className="h-3.5 w-3.5" />
             </button>
@@ -1743,8 +1843,9 @@ function SupportPanelMobile({
             onTabChange("chat");
             onChangeView("list");
           }}
-          className={`flex-1 rounded-lg px-4 py-2 font-medium ${tab === "chat" ? "bg-blue-600 text-white" : "bg-transparent text-slate-300 hover:bg-[#050f25]"
-            }`}
+          className={`flex-1 rounded-lg px-4 py-2 font-medium ${
+            tab === "chat" ? "bg-blue-600 text-white" : "bg-transparent text-slate-300 hover:bg-[#050f25]"
+          }`}
         >
           Chat
         </button>
@@ -1754,8 +1855,9 @@ function SupportPanelMobile({
             onTabChange("email");
             onChangeView("list");
           }}
-          className={`flex-1 rounded-lg px-4 py-2 font-medium ${tab === "email" ? "bg-blue-600 text-white" : "bg-transparent text-slate-300 hover:bg-[#050f25]"
-            }`}
+          className={`flex-1 rounded-lg px-4 py-2 font-medium ${
+            tab === "email" ? "bg-blue-600 text-white" : "bg-transparent text-slate-300 hover:bg-[#050f25]"
+          }`}
         >
           Email
         </button>
@@ -1777,8 +1879,9 @@ function SupportPanelMobile({
                   onSelectConversation(conv.id);
                   onChangeView("chat");
                 }}
-                className={`flex w-full items-center justify-between gap-2 rounded-2xl border border-slate-800 px-4 py-3 text-left text-[11px] transition-colors ${conv.id === activeConversation.id ? "bg-[#050f25]" : "bg-[#07152f] hover:bg-[#050f25]"
-                  }`}
+                className={`flex w-full items-center justify-between gap-2 rounded-2xl border border-slate-800 px-4 py-3 text-left text-[11px] transition-colors ${
+                  conv.id === activeConversation.id ? "bg-[#050f25]" : "bg-[#07152f] hover:bg-[#050f25]"
+                }`}
               >
                 <div className="flex items-center gap-3">
                   <div className="relative h-8 w-8 overflow-hidden rounded-full bg-slate-600">
@@ -1796,6 +1899,7 @@ function SupportPanelMobile({
               </button>
             ))}
           </div>
+          <div ref={endRef} />
         </>
       )}
     </section>
@@ -1982,9 +2086,7 @@ function EditVehicleOverlay({
   const handleSave = () => onSave(details);
 
   const handleDetailChange = (id: string, newValue: string) => {
-    setDetails((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, value: newValue } : item))
-    );
+    setDetails((prev) => prev.map((item) => (item.id === id ? { ...item, value: newValue } : item)));
   };
 
   return (
@@ -2051,13 +2153,15 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (value: boo
     <button
       type="button"
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-4 w-7 items-center rounded-full border border-slate-600 transition-colors ${checked ? "bg-blue-500 border-blue-500" : "bg-slate-700"
-        }`}
+      className={`relative inline-flex h-4 w-7 items-center rounded-full border border-slate-600 transition-colors ${
+        checked ? "bg-blue-500 border-blue-500" : "bg-slate-700"
+      }`}
       aria-pressed={checked}
     >
       <span
-        className={`inline-block h-3 w-3 transform rounded-full bg-white shadow-sm transition-transform duration-150 ${checked ? "translate-x-3" : "translate-x-0"
-          }`}
+        className={`inline-block h-3 w-3 transform rounded-full bg-white shadow-sm transition-transform duration-150 ${
+          checked ? "translate-x-3" : "translate-x-0"
+        }`}
       />
     </button>
   );

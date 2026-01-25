@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { AdminShell } from "@/src/components/AdminShell";
 import { authedJson } from "@/src/lib/authClient";
+import { Trash2 } from "lucide-react";
 
 type RiderDetailsRes = {
   ok: true;
@@ -46,17 +47,13 @@ export default function AdminRiderDetailsPage() {
 
   const id = useMemo(() => {
     const anyParams = params as Record<string, unknown>;
-    return (
-      pickParam(anyParams?.id) ||
-      pickParam(anyParams?.riderId) ||
-      pickParam(anyParams?.userId) ||
-      null
-    );
+    return pickParam(anyParams?.id) || pickParam(anyParams?.riderId) || pickParam(anyParams?.userId) || null;
   }, [params]);
 
   const [data, setData] = useState<RiderDetailsRes | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
 
   async function load() {
     if (!id) {
@@ -77,6 +74,23 @@ export default function AdminRiderDetailsPage() {
       setError(e?.message || "Failed to load rider.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function deleteUser() {
+    if (!id) return;
+    const ok = window.confirm("Delete this rider user? This may remove trips too.");
+    if (!ok) return;
+
+    setDeleting(true);
+    setError(null);
+    try {
+      await authedJson<{ ok: true }>(`/admin/users/${encodeURIComponent(id)}`, { method: "DELETE" });
+      router.push("/admin/dashboard/users");
+    } catch (e: any) {
+      setError(e?.message || "Delete failed.");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -106,20 +120,25 @@ export default function AdminRiderDetailsPage() {
           >
             Refresh
           </button>
+
+          <button
+            onClick={deleteUser}
+            disabled={deleting}
+            className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            <span className="inline-flex items-center gap-2">
+              <Trash2 className="h-4 w-4" />
+              {deleting ? "Deleting..." : "Delete"}
+            </span>
+          </button>
         </div>
 
         {loading ? (
-          <div className="rounded-2xl border border-slate-100 bg-white p-5 text-xs text-slate-500">
-            Loading...
-          </div>
+          <div className="rounded-2xl border border-slate-100 bg-white p-5 text-xs text-slate-500">Loading...</div>
         ) : error ? (
-          <div className="rounded-2xl border border-red-100 bg-red-50 p-5 text-xs text-red-700">
-            {error}
-          </div>
+          <div className="rounded-2xl border border-red-100 bg-red-50 p-5 text-xs text-red-700">{error}</div>
         ) : !data ? (
-          <div className="rounded-2xl border border-slate-100 bg-white p-5 text-xs text-slate-500">
-            No data.
-          </div>
+          <div className="rounded-2xl border border-slate-100 bg-white p-5 text-xs text-slate-500">No data.</div>
         ) : (
           <div className="rounded-2xl border border-slate-100 bg-white p-5 text-xs text-slate-700">
             <div className="flex flex-wrap items-start justify-between gap-4">
@@ -143,9 +162,7 @@ export default function AdminRiderDetailsPage() {
                 </div>
                 <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
                   <div className="text-[10px] text-slate-500">Spent</div>
-                  <div className="text-sm font-semibold text-slate-900">
-                    ${(data.stats.totalSpentCents / 100).toFixed(0)}
-                  </div>
+                  <div className="text-sm font-semibold text-slate-900">${(data.stats.totalSpentCents / 100).toFixed(0)}</div>
                 </div>
               </div>
             </div>

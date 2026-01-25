@@ -37,7 +37,8 @@ function ymd(d: Date) {
 async function getDriversUnderReviewSet() {
   const [pendingDocs, pendingWork] = await Promise.all([
     prisma.driverDocument.findMany({
-      where: { status: "PENDING" },
+      // ✅ include REJECTED too so it still stays "Under review"
+      where: { status: { in: ["PENDING", "REJECTED"] } },
       select: { driver: { select: { userId: true } } },
     }),
     prisma.workLocationChangeRequest.findMany({
@@ -57,95 +58,95 @@ async function getDriversUnderReviewSet() {
  * Mounted in app.ts as:
  *   app.use("/admin/users", adminUsersRouter);
  *
- * So routes are:
- *   GET /admin/users/overview
- *   GET /admin/users/list
- *   GET /admin/users/drivers/:id
- *   GET /admin/users/riders/:id
+ * Routes:
+ *   GET    /admin/users/overview
+ *   GET    /admin/users/list
+ *   GET    /admin/users/documents
+ *   PATCH  /admin/users/documents/:docId
+ *   DELETE /admin/users/:id
+ *   GET    /admin/users/drivers/:id
+ *   GET    /admin/users/riders/:id
  */
 
 router.get("/overview", requireAuth(), requireAdmin, async (_req, res) => {
   const underReview = await getDriversUnderReviewSet();
 
-  const [totalUsers, suspendedDrivers, verifiedDrivers, topEarners] =
-    await Promise.all([
-      prisma.user.count({
-        where: { role: { in: ["DRIVER", "RIDER"] } },
-      }),
+  const [totalUsers, suspendedDrivers, verifiedDrivers, topEarners] = await Promise.all([
+    prisma.user.count({
+      where: { role: { in: ["DRIVER", "RIDER"] } },
+    }),
 
-      prisma.driverProfile.count({
-        where: { driverStatus: "INACTIVE" },
-      }),
+    prisma.driverProfile.count({
+      where: { driverStatus: "INACTIVE" },
+    }),
 
-      prisma.driverProfile.count({
+    prisma.driverProfile.count({
+      where: {
+        onboardingCompletedAt: { not: null },
+        driverStatus: { not: "INACTIVE" },
+        AND: [
+          { documentsV2: { some: { status: "VERIFIED" } } },
+          { documentsV2: { none: { status: { in: ["PENDING", "REJECTED"] } } } },
+        ],
+      },
+    }),
+
+    (async () => {
+      const monthStart = startOfMonth(new Date());
+
+      const grouped = await prisma.driverEarningTransaction.groupBy({
+        by: ["userId"],
         where: {
-          onboardingCompletedAt: { not: null },
-          driverStatus: { not: "INACTIVE" },
-          AND: [
-            { documentsV2: { some: { status: "VERIFIED" } } },
-            { documentsV2: { none: { status: "PENDING" } } },
-          ],
+          createdAt: { gte: monthStart },
+          direction: "CREDIT",
         },
-      }),
+        _sum: { amountCents: true },
+        orderBy: { _sum: { amountCents: "desc" } },
+        take: 12,
+      });
 
-      (async () => {
-        const monthStart = startOfMonth(new Date());
+      let rows = grouped
+        .map((g) => ({
+          userId: g.userId,
+          valueCents: g._sum.amountCents ?? 0,
+        }))
+        .filter((x) => x.valueCents > 0);
 
-        // Prefer DriverEarningTransaction (real revenue)
-        const grouped = await prisma.driverEarningTransaction.groupBy({
-          by: ["userId"],
+      if (rows.length === 0) {
+        const groupedTrips = await prisma.trip.groupBy({
+          by: ["driverId"],
           where: {
+            driverId: { not: null },
+            status: "COMPLETED",
             createdAt: { gte: monthStart },
-            direction: "CREDIT",
           },
-          _sum: { amountCents: true },
-          orderBy: { _sum: { amountCents: "desc" } },
+          _sum: { fareCents: true },
+          orderBy: { _sum: { fareCents: "desc" } },
           take: 12,
         });
 
-        let rows = grouped
+        rows = groupedTrips
           .map((g) => ({
-            userId: g.userId,
-            valueCents: g._sum.amountCents ?? 0,
+            userId: g.driverId as string,
+            valueCents: g._sum.fareCents ?? 0,
           }))
           .filter((x) => x.valueCents > 0);
+      }
 
-        // Fallback: sum Trip.fareCents if no earning transactions exist yet
-        if (rows.length === 0) {
-          const groupedTrips = await prisma.trip.groupBy({
-            by: ["driverId"],
-            where: {
-              driverId: { not: null },
-              status: "COMPLETED",
-              createdAt: { gte: monthStart },
-            },
-            _sum: { fareCents: true },
-            orderBy: { _sum: { fareCents: "desc" } },
-            take: 12,
-          });
+      const ids = rows.map((r) => r.userId);
+      const users = await prisma.user.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, fullName: true },
+      });
 
-          rows = groupedTrips
-            .map((g) => ({
-              userId: g.driverId as string,
-              valueCents: g._sum.fareCents ?? 0,
-            }))
-            .filter((x) => x.valueCents > 0);
-        }
+      const nameById = new Map(users.map((u) => [u.id, u.fullName]));
 
-        const ids = rows.map((r) => r.userId);
-        const users = await prisma.user.findMany({
-          where: { id: { in: ids } },
-          select: { id: true, fullName: true },
-        });
-
-        const nameById = new Map(users.map((u) => [u.id, u.fullName]));
-
-        return rows.map((r) => ({
-          name: nameById.get(r.userId) ?? "Unknown",
-          valueCents: r.valueCents,
-        }));
-      })(),
-    ]);
+      return rows.map((r) => ({
+        name: nameById.get(r.userId) ?? "Unknown",
+        valueCents: r.valueCents,
+      }));
+    })(),
+  ]);
 
   return res.json({
     ok: true,
@@ -166,13 +167,8 @@ router.get("/list", requireAuth(), requireAdmin, async (req, res) => {
   const limit = Math.min(50, Math.max(5, Number(req.query.limit ?? 10)));
   const skip = (page - 1) * limit;
 
-  // ✅ make it mutable (no readonly tuple)
   const roles: Role[] =
-    tab === "drivers"
-      ? ["DRIVER"]
-      : tab === "riders"
-      ? ["RIDER"]
-      : ["DRIVER", "RIDER"];
+    tab === "drivers" ? ["DRIVER"] : tab === "riders" ? ["RIDER"] : ["DRIVER", "RIDER"];
 
   const where: Prisma.UserWhereInput = {
     role: { in: roles },
@@ -201,7 +197,7 @@ router.get("/list", requireAuth(), requireAdmin, async (req, res) => {
 
   const [total, rows] = await Promise.all([
     prisma.user.count({ where }),
-    prisma.user.findMany({
+    (prisma.user.findMany({
       where,
       orderBy: { updatedAt: "desc" },
       skip,
@@ -214,7 +210,7 @@ router.get("/list", requireAuth(), requireAdmin, async (req, res) => {
         updatedAt: true,
         driverProfile: { select: { driverStatus: true } },
       },
-    }) as Promise<Row[]>,
+    }) as Promise<Row[]>),
   ]);
 
   const users = rows.map((u) => {
@@ -238,6 +234,125 @@ router.get("/list", requireAuth(), requireAdmin, async (req, res) => {
   });
 
   return res.json({ ok: true, page, limit, total, users });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  ✅ DOCUMENTS LIST (ALL DRIVERS)                                            */
+/* -------------------------------------------------------------------------- */
+router.get("/documents", requireAuth(), requireAdmin, async (req, res) => {
+  const q = String(req.query.q ?? "").trim();
+  const status = String(req.query.status ?? "").trim().toUpperCase(); // PENDING/VERIFIED/REJECTED
+  const page = Math.max(1, Number(req.query.page ?? 1));
+  const limit = Math.min(50, Math.max(5, Number(req.query.limit ?? 10)));
+  const skip = (page - 1) * limit;
+
+  // Filter drivers by search (name/email) -> get userIds -> driverProfile ids -> driverDocument
+  let driverProfileIds: string[] | null = null;
+
+  if (q) {
+    const users = await prisma.user.findMany({
+      where: {
+        role: "DRIVER",
+        OR: [
+          { fullName: { contains: q, mode: "insensitive" } },
+          { email: { contains: q, mode: "insensitive" } },
+        ],
+      },
+      select: { id: true },
+      take: 500,
+    });
+
+    const userIds = users.map((u) => u.id);
+    if (userIds.length === 0) {
+      return res.json({ ok: true, page, limit, total: 0, documents: [] });
+    }
+
+    const profiles = await prisma.driverProfile.findMany({
+      where: { userId: { in: userIds } },
+      select: { id: true },
+    });
+
+    driverProfileIds = profiles.map((p) => p.id);
+    if (driverProfileIds.length === 0) {
+      return res.json({ ok: true, page, limit, total: 0, documents: [] });
+    }
+  }
+
+  const where: Prisma.DriverDocumentWhereInput = {
+    ...(status && status !== "ALL" ? { status: status as any } : {}),
+    ...(driverProfileIds ? { driverId: { in: driverProfileIds } } : {}),
+  };
+
+  const [total, docs] = await Promise.all([
+    prisma.driverDocument.count({ where }),
+    prisma.driverDocument.findMany({
+      where,
+      orderBy: { updatedAt: "desc" },
+      skip,
+      take: limit,
+      select: {
+        id: true,
+        type: true,
+        url: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        driver: { select: { userId: true } },
+      },
+    }),
+  ]);
+
+  const userIds = Array.from(new Set(docs.map((d) => d.driver.userId)));
+  const users = await prisma.user.findMany({
+    where: { id: { in: userIds } },
+    select: { id: true, fullName: true, email: true },
+  });
+  const map = new Map(users.map((u) => [u.id, u]));
+
+  const out = docs.map((d) => {
+    const u = map.get(d.driver.userId);
+    return {
+      id: d.id,
+      type: d.type,
+      url: d.url,
+      status: d.status as any,
+      createdAt: d.createdAt.toISOString(),
+      updatedAt: d.updatedAt.toISOString(),
+      driver: {
+        userId: d.driver.userId,
+        fullName: u?.fullName ?? "Unknown",
+        email: u?.email ?? "Unknown",
+      },
+    };
+  });
+
+  return res.json({ ok: true, page, limit, total, documents: out });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  ✅ VERIFY / REJECT DOCUMENT                                                */
+/* -------------------------------------------------------------------------- */
+router.patch("/documents/:docId", requireAuth(), requireAdmin, async (req, res) => {
+  const docId = String(req.params.docId);
+  const status = String(req.body?.status ?? "").toUpperCase();
+
+  if (!["VERIFIED", "REJECTED"].includes(status)) {
+    return res.status(400).json({ error: "BAD_STATUS" });
+  }
+
+  const doc = await prisma.driverDocument.findUnique({
+    where: { id: docId },
+    select: { id: true, driverId: true },
+  });
+
+  if (!doc) return res.status(404).json({ error: "DOC_NOT_FOUND" });
+
+  await prisma.driverDocument.update({
+    where: { id: docId },
+    data: { status: status as any },
+  });
+
+  return res.json({ ok: true });
 });
 
 router.get("/drivers/:id", requireAuth(), requireAdmin, async (req, res) => {
@@ -448,6 +563,68 @@ router.get("/riders/:id", requireAuth(), requireAdmin, async (req, res) => {
     })),
     spendSeries,
   });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  ✅ DELETE USER                                                             */
+/* -------------------------------------------------------------------------- */
+router.delete("/:id", requireAuth(), requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+
+  const user = await prisma.user.findUnique({
+    where: { id },
+    select: { id: true, role: true },
+  });
+
+  if (!user) return res.status(404).json({ error: "NOT_FOUND" });
+  if (user.role !== "DRIVER" && user.role !== "RIDER") {
+    return res.status(400).json({ error: "CANNOT_DELETE_ROLE" });
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      if (user.role === "DRIVER") {
+        const dp = await tx.driverProfile.findUnique({ where: { userId: id }, select: { id: true } });
+
+        // keep historical trips but unassign driver (driverId is nullable in your code)
+        await tx.trip.updateMany({ where: { driverId: id }, data: { driverId: null } });
+
+        if (dp) {
+          await tx.driverDocument.deleteMany({ where: { driverId: dp.id } });
+          await tx.driverPreferences.deleteMany({ where: { driverId: dp.id } });
+          await tx.vehicle.deleteMany({ where: { driverId: dp.id } });
+          await tx.workLocationChangeRequest.deleteMany({ where: { driverId: dp.id } });
+        }
+
+        // support conversations (driverId = userId in your driverProfile.ts)
+        const convs = await tx.supportConversation.findMany({ where: { driverId: id }, select: { id: true } });
+        const convIds = convs.map((c) => c.id);
+        if (convIds.length) {
+          await tx.supportMessage.deleteMany({ where: { conversationId: { in: convIds } } });
+          await tx.supportConversation.deleteMany({ where: { id: { in: convIds } } });
+        }
+
+        await tx.driverEarningTransaction.deleteMany({ where: { userId: id } });
+        await tx.driverWallet.deleteMany({ where: { userId: id } });
+        await tx.tripReview.deleteMany({ where: { OR: [{ revieweeId: id }, { reviewerId: id }] } });
+
+        await tx.driverProfile.deleteMany({ where: { userId: id } });
+      }
+
+      if (user.role === "RIDER") {
+        // riderId likely non-null => delete their trips
+        await tx.trip.deleteMany({ where: { riderId: id } });
+        await tx.tripReview.deleteMany({ where: { OR: [{ revieweeId: id }, { reviewerId: id }] } });
+        await tx.riderProfile.deleteMany({ where: { userId: id } });
+      }
+
+      await tx.user.delete({ where: { id } });
+    });
+
+    return res.json({ ok: true });
+  } catch (e: any) {
+    return res.status(500).json({ error: "DELETE_FAILED", message: e?.message || "Failed to delete user" });
+  }
 });
 
 export default router;

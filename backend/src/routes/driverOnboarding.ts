@@ -57,7 +57,6 @@ function driverNextPath(step: number, completedAt: Date | null) {
 }
 
 async function analyzeBasicImage(filePath: string) {
-  // rotate() applies EXIF orientation if present
   const img = sharp(filePath).rotate();
   const meta = await img.metadata();
   if (!meta.width || !meta.height) throw new Error("BAD_IMAGE");
@@ -73,26 +72,20 @@ async function analyzeBasicImage(filePath: string) {
 
 async function validateGovernmentId(filePath: string) {
   const { width, height, brightness } = await analyzeBasicImage(filePath);
-
-  // ✅ FIX: normalize ratio so portrait photos don't auto-fail
   const ratio = Math.max(width, height) / Math.min(width, height);
 
   if (Math.min(width, height) < 600) {
     return { ok: false as const, error: "ID_TOO_SMALL", message: "ID image is too small. Upload a clear close photo." };
   }
-
-  // Keep it as a "light heuristic" only
   if (ratio < 1.15 || ratio > 2.8) {
     return { ok: false as const, error: "ID_WRONG_ASPECT", message: "Upload a clear close photo of your government ID (crop so the card fills most of the frame)." };
   }
-
   if (brightness < 35) {
     return { ok: false as const, error: "ID_TOO_DARK", message: "ID image is too dark. Retake in better light." };
   }
   if (brightness > 240) {
     return { ok: false as const, error: "ID_TOO_BRIGHT", message: "ID image is overexposed/glare. Retake with less flash." };
   }
-
   return { ok: true as const };
 }
 
@@ -102,15 +95,12 @@ async function validateSelfie(filePath: string) {
   if (Math.min(width, height) < 480) {
     return { ok: false as const, error: "SELFIE_TOO_SMALL", message: "Selfie is too small/low-res. Retake." };
   }
-
-  // (slightly more forgiving than before)
   if (brightness < 25) {
     return { ok: false as const, error: "SELFIE_TOO_DARK", message: "Selfie looks too dark. Retake in good lighting." };
   }
   if (brightness > 245) {
     return { ok: false as const, error: "SELFIE_TOO_BRIGHT", message: "Selfie is overexposed. Retake with softer lighting." };
   }
-
   return { ok: true as const };
 }
 
@@ -167,6 +157,13 @@ r.post("/identity-id", requireAuth, requireDriver, upload.single("file"), async 
       include: { documents: true }
     });
 
+    // ✅ ALSO create/update DriverDocument (admin verification)
+    await prisma.driverDocument.upsert({
+      where: { driverId_type: { driverId: profile.id, type: "GOVERNMENT_ID" } },
+      create: { driverId: profile.id, type: "GOVERNMENT_ID", url, status: "PENDING" },
+      update: { url, status: "PENDING" },
+    });
+
     res.json({ ok: true, url, nextPath: driverNextPath(3, profile.onboardingCompletedAt) });
   } catch {
     unlinkSafe(fullPath);
@@ -196,6 +193,13 @@ r.post("/identity-selfie", requireAuth, requireDriver, upload.single("file"), as
         documents: { upsert: { create: { selfieUrl: url }, update: { selfieUrl: url } } }
       },
       include: { documents: true }
+    });
+
+    // ✅ ALSO create/update DriverDocument
+    await prisma.driverDocument.upsert({
+      where: { driverId_type: { driverId: profile.id, type: "SELFIE" } },
+      create: { driverId: profile.id, type: "SELFIE", url, status: "PENDING" },
+      update: { url, status: "PENDING" },
     });
 
     res.json({ ok: true, url, nextPath: driverNextPath(4, profile.onboardingCompletedAt) });
@@ -229,6 +233,29 @@ r.post(
         }
       }
     });
+
+    // ✅ ALSO create/update DriverDocument records
+    if (license) {
+      await prisma.driverDocument.upsert({
+        where: { driverId_type: { driverId: profile.id, type: "DRIVER_LICENSE" } },
+        create: { driverId: profile.id, type: "DRIVER_LICENSE", url: license, status: "PENDING" },
+        update: { url: license, status: "PENDING" },
+      });
+    }
+    if (insurance) {
+      await prisma.driverDocument.upsert({
+        where: { driverId_type: { driverId: profile.id, type: "VEHICLE_INSURANCE" } },
+        create: { driverId: profile.id, type: "VEHICLE_INSURANCE", url: insurance, status: "PENDING" },
+        update: { url: insurance, status: "PENDING" },
+      });
+    }
+    if (vehicleImage) {
+      await prisma.driverDocument.upsert({
+        where: { driverId_type: { driverId: profile.id, type: "VEHICLE_IMAGE" } },
+        create: { driverId: profile.id, type: "VEHICLE_IMAGE", url: vehicleImage, status: "PENDING" },
+        update: { url: vehicleImage, status: "PENDING" },
+      });
+    }
 
     res.json({ ok: true, nextPath: driverNextPath(5, profile.onboardingCompletedAt) });
   }

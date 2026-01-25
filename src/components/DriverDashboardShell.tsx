@@ -36,6 +36,8 @@ type NotificationsListRes = {
   notifications: any[];
 };
 
+const DRIVER_PROFILE_CHANGED_EVENT = "occ:driver-profile-changed";
+
 function apiErrorToText(e: unknown) {
   const err = e as Partial<ApiFail>;
   if (err?.status === 401) return "Unauthorized. Please login again.";
@@ -53,7 +55,10 @@ function assetUrl(u?: string | null) {
 function clearAuthTokens() {
   if (typeof window === "undefined") return;
   const keys = ["accessToken", "access_token", "token", "authToken", "jwt", "ACCESS_TOKEN", "refreshToken", "refresh_token"];
-  for (const k of keys) window.localStorage.removeItem(k);
+  for (const k of keys) {
+    window.localStorage.removeItem(k);
+    window.sessionStorage.removeItem(k);
+  }
 }
 
 export function DriverDashboardShell({ children }: Props) {
@@ -76,6 +81,7 @@ export function DriverDashboardShell({ children }: Props) {
       const data = await apiFetch<ProfileRes>("/driver/profile", { method: "GET", noStore: true });
       setDriverName(data.driver?.name ?? "—");
       setDriverAvatar(assetUrl(data.driver?.avatarUrl) ?? "/driver-selfie.jpg");
+      setShellError(null);
     } catch (e) {
       setShellError(apiErrorToText(e));
     }
@@ -89,7 +95,7 @@ export function DriverDashboardShell({ children }: Props) {
       });
       setUnreadCount(Number.isFinite(data.unreadCount) ? data.unreadCount : 0);
     } catch {
-      // silently ignore
+      // ignore
     }
   }
 
@@ -97,25 +103,36 @@ export function DriverDashboardShell({ children }: Props) {
     void loadProfileSummary();
     void loadUnreadCount();
 
-    const intervalId = window.setInterval(() => {
+    // notifications polling
+    const notifInterval = window.setInterval(() => {
       void loadUnreadCount();
     }, 25000);
 
-    // allow other pages to force-refresh badge
-    const handler = () => void loadUnreadCount();
-    window.addEventListener("occ:notifications-changed", handler);
+    // profile polling (light)
+    const profileInterval = window.setInterval(() => {
+      void loadProfileSummary();
+    }, 60000);
+
+    // allow pages to force-refresh badge
+    const notificationsHandler = () => void loadUnreadCount();
+    window.addEventListener("occ:notifications-changed", notificationsHandler);
+
+    // profile changed event (avatar/name updates instantly)
+    const profileHandler = () => void loadProfileSummary();
+    window.addEventListener(DRIVER_PROFILE_CHANGED_EVENT, profileHandler);
 
     return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener("occ:notifications-changed", handler);
+      window.clearInterval(notifInterval);
+      window.clearInterval(profileInterval);
+      window.removeEventListener("occ:notifications-changed", notificationsHandler);
+      window.removeEventListener(DRIVER_PROFILE_CHANGED_EVENT, profileHandler);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleLogout() {
     try {
-      // optional: call backend logout endpoint if you have one
-      // await apiFetch("/auth/logout", { method: "POST" });
+      await apiFetch<{ ok: true }>("/driver/profile/logout", { method: "POST" });
     } catch {
       // ignore
     } finally {
@@ -149,6 +166,7 @@ export function DriverDashboardShell({ children }: Props) {
               <Link
                 key={item.href}
                 href={item.href}
+                aria-current={active ? "page" : undefined}
                 className={clsx(
                   "relative flex items-center gap-3 rounded-xl px-3 py-2 text-sm",
                   active ? "bg-blue-600/20 text-blue-400" : "text-slate-300 hover:bg-slate-800/70"

@@ -11,25 +11,6 @@ import { randomUUID } from "crypto";
 
 export const driverProfileRouter = Router();
 
-/**
- * Mounted at: app.use("/driver/profile", driverProfileRouter)
- *
- * Frontend will call:
- * - GET    /driver/profile
- * - PATCH  /driver/profile/security
- * - PATCH  /driver/profile/preferences
- * - POST   /driver/profile/work-location/request
- * - PUT    /driver/profile/vehicle
- * - POST   /driver/profile/vehicle/image        ✅ (NEW) upload vehicle image file
- * - PUT    /driver/profile/documents/:type
- * - POST   /driver/profile/change-password
- * - GET    /driver/profile/support/conversations
- * - POST   /driver/profile/support/conversations/:id/messages
- */
-
-/* -------------------------------------------------------------------------- */
-/*  Upload setup (Vehicle image upload)                                       */
-/* -------------------------------------------------------------------------- */
 const uploadDir = path.join(process.cwd(), "uploads");
 fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -53,13 +34,10 @@ const upload = multer({
 });
 
 function safeUnlink(p: string) {
-  try {
-    fs.unlinkSync(p);
-  } catch {}
+  try { fs.unlinkSync(p); } catch {}
 }
 
 function fmtTime(iso: Date) {
-  // "11:55 AM" style for UI
   return iso.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
@@ -77,16 +55,12 @@ function timeAgo(d: Date) {
 
 async function ensureDriverProfile(userId: string) {
   let dp = await prisma.driverProfile.findUnique({ where: { userId } });
-  if (!dp) {
-    dp = await prisma.driverProfile.create({
-      data: { userId },
-    });
-  }
+  if (!dp) dp = await prisma.driverProfile.create({ data: { userId } });
   return dp;
 }
 
 async function ensureDriverPreferences(driverProfileId: string) {
-  const pref = await prisma.driverPreferences.upsert({
+  return prisma.driverPreferences.upsert({
     where: { driverId: driverProfileId },
     create: {
       driverId: driverProfileId,
@@ -98,23 +72,16 @@ async function ensureDriverPreferences(driverProfileId: string) {
     },
     update: {},
   });
-  return pref;
 }
 
 function docTitle(type: string) {
   switch (type) {
-    case "DRIVER_LICENSE":
-      return "Driver license";
-    case "VEHICLE_INSURANCE":
-      return "Vehicle insurance";
-    case "GOVERNMENT_ID":
-      return "Government ID";
-    case "SELFIE":
-      return "Selfie";
-    case "VEHICLE_IMAGE":
-      return "Vehicle image";
-    default:
-      return type;
+    case "DRIVER_LICENSE": return "Driver license";
+    case "VEHICLE_INSURANCE": return "Vehicle insurance";
+    case "GOVERNMENT_ID": return "Government ID";
+    case "SELFIE": return "Selfie";
+    case "VEHICLE_IMAGE": return "Vehicle image";
+    default: return type;
   }
 }
 
@@ -148,9 +115,6 @@ async function ensureSeedSupportConversations(driverId: string) {
   });
 }
 
-/* -------------------------------------------------------------------------- */
-/*  GET FULL PROFILE (used by your page)                                      */
-/* -------------------------------------------------------------------------- */
 driverProfileRouter.get("/", requireAuth, requireDriver, async (req, res) => {
   const userId = req.auth!.userId;
 
@@ -160,7 +124,6 @@ driverProfileRouter.get("/", requireAuth, requireDriver, async (req, res) => {
   const dp = await ensureDriverProfile(userId);
   const pref = await ensureDriverPreferences(dp.id);
 
-  // stats
   const [tripAgg, ratingAgg] = await Promise.all([
     prisma.trip.aggregate({
       where: { driverId: userId, status: "COMPLETED" },
@@ -179,14 +142,17 @@ driverProfileRouter.get("/", requireAuth, requireDriver, async (req, res) => {
 
   const vehicle = await prisma.vehicle.findUnique({ where: { driverId: dp.id } });
 
-  // docs: return at least license + insurance in list (even if missing)
+  // ✅ include all doc types so admin verification is visible to driver
+  const REQUIRED = ["GOVERNMENT_ID", "SELFIE", "DRIVER_LICENSE", "VEHICLE_INSURANCE", "VEHICLE_IMAGE"] as const;
+
   const docs = await prisma.driverDocument.findMany({
-    where: { driverId: dp.id, type: { in: ["DRIVER_LICENSE", "VEHICLE_INSURANCE"] } },
+    where: { driverId: dp.id, type: { in: [...REQUIRED] } },
     orderBy: { updatedAt: "desc" },
   });
 
   const docMap = new Map(docs.map((d) => [d.type, d]));
-  const documents = ["DRIVER_LICENSE", "VEHICLE_INSURANCE"].map((t) => {
+
+  const documents = REQUIRED.map((t) => {
     const d = docMap.get(t);
     return {
       id: d?.id ?? t.toLowerCase(),
@@ -196,22 +162,13 @@ driverProfileRouter.get("/", requireAuth, requireDriver, async (req, res) => {
     };
   });
 
-  // avatar: use driverProfile.avatarUrl else selfie document if exists
-  // vehicle image fallback: use vehicle.imageUrl else VEHICLE_IMAGE doc url (from onboarding)
   const [selfie, vehicleImageDoc] = await Promise.all([
-    prisma.driverDocument.findFirst({
-      where: { driverId: dp.id, type: "SELFIE" },
-      orderBy: { updatedAt: "desc" },
-    }),
-    prisma.driverDocument.findFirst({
-      where: { driverId: dp.id, type: "VEHICLE_IMAGE" },
-      orderBy: { updatedAt: "desc" },
-    }),
+    prisma.driverDocument.findFirst({ where: { driverId: dp.id, type: "SELFIE" }, orderBy: { updatedAt: "desc" } }),
+    prisma.driverDocument.findFirst({ where: { driverId: dp.id, type: "VEHICLE_IMAGE" }, orderBy: { updatedAt: "desc" } }),
   ]);
 
   const vehicleImageUrl = vehicle?.imageUrl ?? vehicleImageDoc?.url ?? null;
 
-  // support
   await ensureSeedSupportConversations(userId);
   const convos = await prisma.supportConversation.findMany({
     where: { driverId: userId, channel: "CHAT" },
@@ -233,7 +190,6 @@ driverProfileRouter.get("/", requireAuth, requireDriver, async (req, res) => {
     })),
   }));
 
-  // vehicle details list to match your UI cards
   const vehicleDetails = [
     { id: "make", label: "Vehicle make", value: vehicle?.make ?? "—" },
     { id: "color", label: "Car color", value: vehicle?.color ?? "—" },
@@ -261,7 +217,7 @@ driverProfileRouter.get("/", requireAuth, requireDriver, async (req, res) => {
       address: dp.workAddress ?? "—",
     },
     vehicle: {
-      imageUrl: vehicleImageUrl, // ✅ FIXED: fallback to onboarding VEHICLE_IMAGE doc
+      imageUrl: vehicleImageUrl,
       details: vehicleDetails,
     },
     security: {
@@ -280,6 +236,8 @@ driverProfileRouter.get("/", requireAuth, requireDriver, async (req, res) => {
     supportConversations,
   });
 });
+
+/* ... keep the rest of your file SAME (security, preferences, uploads, support, logout) ... */
 
 /* -------------------------------------------------------------------------- */
 /*  SECURITY TOGGLES                                                          */
