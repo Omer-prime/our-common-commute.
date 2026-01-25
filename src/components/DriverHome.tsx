@@ -5,6 +5,7 @@ import Link from "next/link";
 import { DriverDashboardShell } from "@/src/components/DriverDashboardShell";
 import { DriverLiveMap } from "@/src/components/DriverLiveMap";
 import { RideRequestCard } from "@/src/components/RideRequestCard";
+import { authedJson } from "@/src/lib/authClient";
 
 type DriverStatusUI = "active" | "inactive" | "occupied";
 type DriverStatusAPI = "ACTIVE" | "INACTIVE" | "OCCUPIED";
@@ -38,24 +39,12 @@ function uiToApiStatus(s: DriverStatusUI): DriverStatusAPI {
   return "INACTIVE";
 }
 
-function getToken() {
-  if (typeof window === "undefined") return null;
-  return (
-    localStorage.getItem("accessToken") ||
-    localStorage.getItem("access_token") ||
-    localStorage.getItem("token") ||
-    null
-  );
-}
-
 function moneyFromCents(cents: number) {
   const val = Number(cents || 0) / 100;
   return `$${val.toFixed(2)}`;
 }
 
 export function DriverHome() {
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
-
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [data, setData] = useState<DashboardHomeResponse | null>(null);
@@ -68,18 +57,10 @@ export function DriverHome() {
   async function fetchHome() {
     setLoading(true);
     setErr(null);
+
     try {
-      const token = getToken();
-      const res = await fetch(`${API_BASE}/driver/dashboard/home`, {
-        method: "GET",
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
-
-      const json = (await res.json()) as DashboardHomeResponse & { error?: string; message?: string };
-      if (!res.ok) throw new Error(json?.message || json?.error || "Failed to load dashboard");
-
+      // ✅ uses same auth + base + refresh logic as the rest of the app
+      const json = await authedJson<DashboardHomeResponse>("/driver/dashboard/home", { method: "GET" });
       setData(json);
     } catch (e: any) {
       setErr(e?.message || "Failed to load dashboard");
@@ -90,23 +71,19 @@ export function DriverHome() {
   }
 
   async function changeStatus(next: DriverStatusUI) {
-    if (data) {
-      setData({ ...data, driver: { ...data.driver, status: uiToApiStatus(next) } });
-    }
+    // optimistic UI update
+    setData((prev) =>
+      prev ? { ...prev, driver: { ...prev.driver, status: uiToApiStatus(next) } } : prev
+    );
 
     try {
-      const token = getToken();
-      const res = await fetch(`${API_BASE}/driver/dashboard/status`, {
+      await authedJson<{ ok: true; status: DriverStatusAPI }>(`/driver/dashboard/status`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ status: uiToApiStatus(next) }),
+        json: { status: uiToApiStatus(next) },
       });
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.message || json?.error || "Failed to update status");
+      // keep UI in sync (optional but safe)
+      await fetchHome();
     } catch {
       await fetchHome();
     }
@@ -146,7 +123,7 @@ export function DriverHome() {
         {err && (
           <div className="rounded-2xl border border-red-800 bg-red-950/40 p-4 text-sm text-red-200">
             {err}
-            <button className="ml-3 underline" onClick={fetchHome}>
+            <button className="ml-3 underline" onClick={() => void fetchHome()}>
               Retry
             </button>
           </div>
