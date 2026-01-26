@@ -2,10 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AuthShell } from "@/src/components/AuthShell";
 import { Button, TextInput } from "@/src/components/ui";
 import { login } from "@/src/lib/authClient";
+import { me } from "@/src/lib/authClient";
+import router from "next/dist/shared/lib/router/router";
+
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -15,6 +18,14 @@ export default function AdminLoginPage() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+  (async () => {
+    try {
+      const res = await me();
+      if (res?.user?.role === "ADMIN") router.replace("/admin/dashboard");
+    } catch {}
+  })();
+}, [router]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
