@@ -13,13 +13,11 @@ export default function IdentityIdPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function onProceed() {
-    if (!file) return;
-
+  async function submit(withFile: boolean) {
     const auth = getAuth();
     if (!auth?.accessToken) {
       setError("Your session expired. Please login again.");
-      router.push("/driver/login"); // adjust route if different
+      router.push("/driver/login");
       return;
     }
 
@@ -28,7 +26,10 @@ export default function IdentityIdPage() {
 
     try {
       const fd = new FormData();
-      fd.append("file", file); // MUST be "file"
+      if (withFile && file) {
+        fd.append("file", file); // backend expects "file"
+      }
+      // If skipping: send empty FormData (backend will treat as skipped)
 
       const res = await fetch(`${API_URL}/driver/onboarding/identity-id`, {
         method: "POST",
@@ -36,7 +37,6 @@ export default function IdentityIdPage() {
         body: fd,
       });
 
-      // Read as text first to avoid JSON parse crashing
       const text = await res.text();
       let data: any = {};
       try {
@@ -45,37 +45,29 @@ export default function IdentityIdPage() {
         data = { raw: text };
       }
 
-      // Handle auth expiry clearly
       if (res.status === 401) {
         setError("Session expired. Please login again.");
-        router.push("/driver/login"); // adjust route if different
-        return;
-      }
-
-      // If later you add rate-limit / temp lock
-      if (res.status === 429) {
-        setError(data?.message || "Too many failed attempts. Please try again later.");
+        router.push("/driver/login");
         return;
       }
 
       if (!res.ok) {
-        setError(data?.message || data?.error || `Upload failed (${res.status})`);
+        setError(data?.message || data?.error || `Request failed (${res.status})`);
         return;
       }
 
       const nextPath = data?.nextPath;
       if (!nextPath || typeof nextPath !== "string") {
-        setError("Upload succeeded but next step was not returned. Please try again.");
+        setError("Done, but next step was not returned. Please try again.");
         return;
       }
 
       router.push(nextPath);
     } catch (e: any) {
-      // This is the big missing part: fetch() network/CORS errors
       setError(
         e?.message?.includes("Failed to fetch")
-          ? "Network error: could not upload. Please check internet / API URL / CORS."
-          : e?.message || "Network error: upload failed. Please try again."
+          ? "Network error: could not reach the server. Please check internet / API URL / CORS."
+          : e?.message || "Network error: request failed. Please try again."
       );
     } finally {
       setLoading(false);
@@ -87,35 +79,44 @@ export default function IdentityIdPage() {
       step={2}
       totalSteps={9}
       title="Identity & Security"
-      subtitle="This is required for identity verification and safety."
+      subtitle="Upload your government ID (you can skip and upload later)."
     >
       <div className="flex flex-col gap-5">
         <p className="text-xs text-slate-500 text-center">
-          Upload your government-issued ID
+          Upload your government-issued ID (image or PDF)
         </p>
 
         <label className="flex h-12 w-full max-w-sm cursor-pointer items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-sm font-medium text-slate-700 hover:bg-slate-100">
           <span>{file ? file.name : "Upload ID"}</span>
           <input
             type="file"
-            accept="image/*"
+            accept="image/*,application/pdf"
             className="hidden"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />
         </label>
 
-        {error ? (
-          <p className="text-xs text-red-600 text-center">{error}</p>
-        ) : null}
+        {error ? <p className="text-xs text-red-600 text-center">{error}</p> : null}
 
-        <Button
-          type="button"
-          className="w-full"
-          disabled={!file || loading}
-          onClick={onProceed}
-        >
-          {loading ? "Uploading..." : "Proceed"}
-        </Button>
+        <div className="flex w-full flex-col gap-3">
+          <Button
+            type="button"
+            className="w-full"
+            disabled={loading || !file}
+            onClick={() => submit(true)}
+          >
+            {loading ? "Please wait..." : "Proceed"}
+          </Button>
+
+          <button
+            type="button"
+            className="text-xs font-medium text-slate-600 underline underline-offset-4 disabled:opacity-50"
+            disabled={loading}
+            onClick={() => submit(false)}
+          >
+            Skip for now
+          </button>
+        </div>
       </div>
     </DriverOnboardingStep>
   );
