@@ -7,7 +7,7 @@ Built with **Next.js 16**, **React 19**, **TypeScript**, **Tailwind CSS v4**, an
 
 ## ✨ Features
 
-- Rider authentication (login/signup) *(if enabled by backend)*
+- Rider authentication (login/signup) 
 - Request a ride (pickup, drop-off, ride details)
 - Map experience using Google Maps
 - Ride status flow (requested → accepted → started → completed/cancelled)
@@ -44,7 +44,7 @@ Built with **Next.js 16**, **React 19**, **TypeScript**, **Tailwind CSS v4**, an
 
 ### 1) Clone the repo
 ```bash
-git clone <YOUR_REPO_URL>
+git clone https://github.com/Omer-prime/our-common-commute..git
 cd our-common-commute
 ```
 2) Install dependencies
@@ -69,7 +69,6 @@ NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=YOUR_GOOGLE_MAPS_KEY
 # Optional: Realtime (if you use sockets)
 NEXT_PUBLIC_SOCKET_URL=http://localhost:5000
 
-Never commit real keys. Add .env.local to .gitignore (Next.js usually does this already).
 
 ▶️ Run Locally
 npm run dev
