@@ -1,42 +1,42 @@
-# Rider Web App
+# Our Common Commute — Rider Web App
 
-A web application for riders to book rides, track drivers in real time, manage trips, and handle profile/wallet features.  
-This repo contains the **frontend** for the Rider Web App and connects to a separate backend API.
-
----
-
-## ✨ Key Features
-
-- Rider authentication (login/signup/forgot password)
-- Create ride requests (pickup, drop-off, ride type, notes)
-- Live ride tracking (map + driver location updates)
-- Trip status flow (requested → accepted → started → completed/cancelled)
-- Trip history + trip details
-- Rider profile (name, phone, photo, settings)
-- Wallet / payments (optional)
-- Promo codes / discounts (optional)
-- Support / contact (optional)
-- Fully responsive UI
-
-> Note: Features marked “optional” depend on your backend setup.
+Rider-side web application for booking rides, managing trips, and tracking ride status on a map.  
+Built with **Next.js 16**, **React 19**, **TypeScript**, **Tailwind CSS v4**, and **Google Maps**.
 
 ---
 
-## 🧱 Tech Stack 
+## ✨ Features
 
-- Frontend: React + TypeScript (or JavaScript)
-- Framework: Next.js **or** Vite (choose whichever your project uses)
-- Styling: Tailwind CSS / CSS / Bootstrap (your choice)
-- Maps: Google Maps / Mapbox (your choice)
-- API: REST (or GraphQL)
-- Realtime: WebSockets / Socket.IO (optional)
+- Rider authentication (login/signup) *(if enabled by backend)*
+- Request a ride (pickup, drop-off, ride details)
+- Map experience using Google Maps
+- Ride status flow (requested → accepted → started → completed/cancelled)
+- Trip history + trip details *(if enabled by backend)*
+- QR code support (e.g., trip confirmation / verification)
+- Responsive UI
+
+> Some features depend on your backend/API and realtime setup.
+
+---
+
+## 🧱 Tech Stack
+
+- **Framework:** Next.js 16
+- **UI:** React 19
+- **Language:** TypeScript
+- **Styling:** Tailwind CSS v4
+- **Maps:** `@react-google-maps/api`
+- **Charts:** Recharts
+- **Icons:** Lucide React
+- **Utilities:** clsx
+- **Other:** qrcode
 
 ---
 
 ## ✅ Requirements
 
-- Node.js **18+** (recommended)
-- npm / yarn / pnpm (any one)
+- **Node.js 18+** (recommended)
+- npm / yarn / pnpm
 
 ---
 
@@ -45,7 +45,7 @@ This repo contains the **frontend** for the Rider Web App and connects to a sepa
 ### 1) Clone the repo
 ```bash
 git clone <YOUR_REPO_URL>
-cd rider-web-app
+cd our-common-commute
 ```
 2) Install dependencies
 npm install
@@ -53,120 +53,75 @@ npm install
 yarn
 # or
 pnpm install
-3) Setup environment variables
 
-Create one of these (based on your setup):
+3) Environment Variables
 
-Next.js: .env.local
+Create a file named .env.local in the project root.
 
-Vite: .env
+Example (edit these names to match your project):
 
-Example:
-
-# API
+# Backend API (example)
 NEXT_PUBLIC_API_BASE_URL=http://localhost:5000
-# or (Vite)
-VITE_API_BASE_URL=http://localhost:5000
 
-# Realtime (optional)
+# Google Maps
+NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=YOUR_GOOGLE_MAPS_KEY
+
+# Optional: Realtime (if you use sockets)
 NEXT_PUBLIC_SOCKET_URL=http://localhost:5000
-# or (Vite)
-VITE_SOCKET_URL=http://localhost:5000
 
-# Maps (choose what you use)
-NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=YOUR_KEY
-# OR
-NEXT_PUBLIC_MAPBOX_TOKEN=YOUR_TOKEN
-
-Keep secrets out of GitHub. Do not commit real keys.
+Never commit real keys. Add .env.local to .gitignore (Next.js usually does this already).
 
 ▶️ Run Locally
-If this is a Next.js project:
 npm run dev
 
 Open: http://localhost:3000
 
-If this is a Vite project:
-npm run dev
-
-Vite will show the local URL in your terminal.
-
-🏗️ Build for Production
-Next.js
+🏗️ Build & Run Production
 npm run build
 npm run start
-Vite
-npm run build
-npm run preview
-🧪 Lint / Format (Optional)
+🔍 Lint
 npm run lint
-npm run format
-
-If these scripts don’t exist in your project, remove this section.
-
-📁 Project Structure (Typical)
-rider-web-app/
-  src/
-    components/
-    pages/ or app/               # Next.js routing (pages or app router)
-    routes/                      # if using React Router
-    services/                    # API calls (axios/fetch)
-    store/                       # state management (redux/zustand/context)
-    hooks/
-    utils/
-    styles/
+📁 Project Structure (Typical Next.js)
+our-common-commute/
+  app/                  # App Router pages (if using App Router)
+  pages/                # Pages Router (if using Pages Router)
+  components/
+  lib/
   public/
-  .env.example
+  styles/
   package.json
   README.md
-🔌 Backend / API Notes
 
-This frontend expects a backend that provides endpoints such as:
+Your repo may have either app/ or pages/ depending on which router you used.
 
-POST /auth/login
+🗺️ Google Maps Notes
 
-POST /auth/register
+This app uses @react-google-maps/api. Make sure your Google Cloud project has:
 
-GET /me
+Maps JavaScript API enabled
 
-POST /rides/request
+Billing enabled (required by Google for most Maps usage)
 
-GET /rides/current
+A restricted API key (recommended)
 
-GET /rides/history
+📦 Deployment
 
-WebSocket events for live driver/ride updates (if enabled)
+Recommended: Vercel (best for Next.js)
 
-Update the API base URL in your env file to connect your backend.
+Deployment checklist:
 
-🌍 Deployment
+Push the repo to GitHub
 
-Common options:
+Import into Vercel
 
-Vercel (best for Next.js)
+Add environment variables in Vercel project settings
 
-Netlify
+Deploy
 
-Cloudflare Pages
+You can also deploy on a VPS using npm run build + npm run start behind Nginx.
 
-VPS (Nginx + Node)
 
-Basic steps:
+👤 Maintainer
 
-Set environment variables in your hosting dashboard
-
-Build the app
-
-Deploy the output (or run start for Next.js)
-
-🤝 Contributing
-
-Fork the repo
-
-Create a new branch: git checkout -b feature/my-feature
-
-Commit changes: git commit -m "Add my feature"
-
-Push: git push origin feature/my-feature
-
-Open a Pull Request
+Omer Prime
+email : umer.ome23@gmail.com
