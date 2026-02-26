@@ -22,7 +22,7 @@ This repo contains the **frontend** for the Rider Web App and connects to a sepa
 
 ---
 
-## 🧱 Tech Stack (Edit if needed)
+## 🧱 Tech Stack 
 
 - Frontend: React + TypeScript (or JavaScript)
 - Framework: Next.js **or** Vite (choose whichever your project uses)
